@@ -4,6 +4,7 @@ import (
 	"net"
 	"log"
 	"bufio"
+	"io"
 )
 
 //primero voy a lograr establecer una conexion entre el servidor y el cliente para luego mandar un texto
@@ -12,7 +13,7 @@ func main(){
 	if err 	!= nil{
 		log.Fatal(err)
 	}
-
+	log.Println("Servidor activo...")
 	for{
 		conn, err := ln.Accept()
 		if err !=  nil{
@@ -25,9 +26,17 @@ func main(){
 
 
 func hCliente(conn net.Conn){
-	entrada := bufio.NewScanner(conn)
-	for entrada.Scan(){
-		log.Println(entrada.Text())
+	//Creo un reader sobre la conexion, no un scaner
+	//bueno pero cómo leo los datos de la conexion
+	var msg string
+	reader := conn.Read()
+	for {
+		err := io.Copy(msg, reader) //si copy requiere un lector y un escritor le pasaer os.Stdout como el destino
+		if err != nil{
+			log.Println(err)
+			return
+		}
+		log.Println(msg) 
 	}
 	conn.Close()
 }

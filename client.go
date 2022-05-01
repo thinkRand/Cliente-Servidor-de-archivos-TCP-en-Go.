@@ -1,4 +1,4 @@
-package cliente
+package main
 
 import(
 	"net"
@@ -14,10 +14,13 @@ func main(){
 	if err != nil{
 		log.Fatal(err)
 	}
-
-	thisCli := bufio.NewScanner(os.Stdin)
-	for thisCli.Scan(){
-		msg := thisCli.Text()
+	log.Println("Cliente activo...")
+	//el bufio funciona diferente con las conexiones que con la entrada de la terminal
+	thisCli := bufio.NewReader(os.Stdin)
+	//lo que pasa aquí es que la variable mensaje recive la linea, pero si ocurre un error msg tiene el error
+	for {
+		msg, _, _ := thisCli.ReadLine()
+		conn.Write(msg)
 	}
 	conn.Close()
 }
