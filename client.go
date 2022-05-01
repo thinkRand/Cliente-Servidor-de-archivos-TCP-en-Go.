@@ -34,6 +34,8 @@ func main(){
 	if err != nil{
 		log.Println("El archivo no se pudo enviar.")
 	}
+	FDT := "<FDT>" //Fin de Transmisión
+	conn.Write([]byte(FDT))
 	log.Println("Archivo enviado")
 	thisCli := bufio.NewReader(os.Stdin)
 	for {
