@@ -3,7 +3,9 @@ package main
 import (
 	"log"
 	"net"
+	"os"
 )
+
 
 //primero voy a lograr establecer una conexion entre el servidor y el cliente para luego mandar un texto
 func main(){
@@ -25,18 +27,39 @@ func main(){
 
 //runtina para comunicarce con el cliente
 func hCliente(conn net.Conn){
-	b := make([]byte,100) //un slice de bytes , son 100 caractares maximo por lectura
+	log.Println("Cliente conectado")
+	// b := make([]byte,100) //un slice de bytes , son 100 caractares maximo por lectura
 	//Porque no se reconove a la variable dentro del for?
+	arlocal, err := os.Create("archivo")
+	if err != nil{
+		log.Println("No se pudo crear la ruta local para el archivo")
+	}
+
+	//parece que io.Copy no funcion apropiadamente para tomar los bytes provenientes del clinte y asignarlos al archivo
+	//usare read
+	buffer := make([]byte,1024)
+	// var bc int //aqui se declara y luego se vuelve a declarar abajo
 	for {
-		bc := 0 //esta variable debe estar aquí porque no funciona cuando está fuera del for, no se por que
-		bc, err := conn.Read(b) //si copy requiere un lector y un escritor le pasaer os.Stdout como el destino
+		bc, err := conn.Read(buffer) //lee bytes de 1024 en 1024
 		if err != nil{
 			log.Println(err)
 			return
 		}
-
-		//el error de impresion tiene que ver con el UTF-8
-		log.Println("Mensaje: ",(string(b[:bc]))) 
+		
+		n, err := arlocal.Write(buffer[:bc])
+		if err != nil{
+			if n != len(buffer){
+				log.Println("no se escribieron todos los bytes")
+			} 
+			log.Println("fallo al escribir el archivo")
+		return
+		}
+		
 	}
+
+	log.Println("Archivo recivido")
+	// 	//el error de impresion tiene que ver con el UTF-8
+	// 	log.Println("Mensaje: ",(string(b[:bc]))) 
+	// }
 	conn.Close()
 }

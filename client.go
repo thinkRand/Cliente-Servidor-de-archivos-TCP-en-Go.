@@ -24,17 +24,17 @@ func main(){
 		log.Println("El archivo no se pudo leer")
 	}
 	defer ar.Close()
-	arInfo, err := ar.Stat()
+	// arInfo, err := ar.Stat()
 	//evio informacion del archivo al servidor
-	conn.Write([]byte(arInfo.Name())) 
-	conn.Write([]byte(string(arInfo.Size()))) //el error de impresion tiene que ver con UTF-8
+	// conn.Write([]byte(arInfo.Name())) 
+	// conn.Write([]byte(string(arInfo.Size()))) //el error de impresion tiene que ver con UTF-8
 
 	//Envio el archivo
-	io.Copy(conn, ar)
+	_ , err = io.Copy(conn, ar)
 	if err != nil{
 		log.Println("El archivo no se pudo enviar.")
 	}
-	
+	log.Println("Archivo enviado")
 	thisCli := bufio.NewReader(os.Stdin)
 	for {
 		msg, _, _ := thisCli.ReadLine()
