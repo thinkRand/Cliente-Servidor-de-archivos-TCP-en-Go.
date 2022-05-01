@@ -25,19 +25,18 @@ func main(){
 
 //runtina para comunicarce con el cliente
 func hCliente(conn net.Conn){
-	//Creo un reader sobre la conexion, no un scaner
-	//bueno pero cómo leo los datos de la conexion
-	b := make([]byte,100) //un slice de bytes 
+	b := make([]byte,100) //un slice de bytes , son 100 caractares maximo por lectura
 	//Porque no se reconove a la variable dentro del for?
 	for {
-		bc := 0
+		bc := 0 //esta variable debe estar aquí porque no funciona cuando está fuera del for, no se por que
 		bc, err := conn.Read(b) //si copy requiere un lector y un escritor le pasaer os.Stdout como el destino
 		if err != nil{
 			log.Println(err)
 			return
 		}
 
-		log.Println("Mensaje: ",string(b[:bc])) 
+		//el error de impresion tiene que ver con el UTF-8
+		log.Println("Mensaje: ",(string(b[:bc]))) 
 	}
 	conn.Close()
 }

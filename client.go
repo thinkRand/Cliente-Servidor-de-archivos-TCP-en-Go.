@@ -5,6 +5,8 @@ import(
 	"log"
 	"bufio"
 	"os"
+	"io"
+	"strings"
 )
 
 
@@ -15,9 +17,25 @@ func main(){
 		log.Fatal(err)
 	}
 	log.Println("Cliente activo...")
-	//el bufio funciona diferente con las conexiones que con la entrada de la terminal
+	archivo := "pic.png"
+	//en caso de un nombre de archivo con espasios en el los elimino con TrimSpace
+	ar, err := os.Open(strings.TrimSpace(archivo))
+	if err != nil{
+		log.Println("El archivo no se pudo leer")
+	}
+	defer ar.Close()
+	arInfo, err := ar.Stat()
+	//evio informacion del archivo al servidor
+	conn.Write([]byte(arInfo.Name())) 
+	conn.Write([]byte(string(arInfo.Size()))) //el error de impresion tiene que ver con UTF-8
+
+	//Envio el archivo
+	io.Copy(conn, ar)
+	if err != nil{
+		log.Println("El archivo no se pudo enviar.")
+	}
+	
 	thisCli := bufio.NewReader(os.Stdin)
-	//lo que pasa aquí es que la variable mensaje recive la linea, pero si ocurre un error msg tiene el error
 	for {
 		msg, _, _ := thisCli.ReadLine()
 		conn.Write(msg)
