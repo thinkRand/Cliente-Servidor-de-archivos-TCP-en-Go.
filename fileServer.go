@@ -25,29 +25,37 @@ func main(){
 	}
 }
 
+//para crear nombres temporales para el archivo en caso de ser necesario
+func nombreTemp()(nombre string){
+	return "archivo"
+}
 
 //runtina para comunicarce con el cliente
 func hCliente(conn net.Conn){
-	log.Println("Cliente conectado")
+	log.Println("Cliente conectado: ", conn.RemoteAddr().String())
 
-	//creo un nombre temporal para el archivo
+	//creo el archivo que voy a llenar
 	arlocal, err := os.Create("archivo")
 	if err != nil{
 		log.Println("No se pudo crear la ruta local para el archivo")
 	}
-	defer arlocal.Close()
-	//parece que io.Copy no funcion apropiadamente para tomar los bytes provenientes del clinte y asignarlos al archivo
+	defer arlocal.Close() 
+	//io.Copy no funcina apropiadamente para leer de la conexion y llenar el archivo
 	buffer := make([]byte,1024)
-	// var bc int //aqui se declara y luego se vuelve a declarar abajo
 	//read lee de la conexion de forma infinita, para que se detenga en caso de EOF
 	FDT := "<FDT>" //Fin de Transmisión
 	r := io.Reader(conn)
+	var count int
 	for {
 		n, err := r.Read(buffer)
+		count+=n
+		// log.Print(n)
+		//leo los ultimos 5 bytes para ver si se presenta FDT
 		//<FDT> tiene 5 bytes
 		if string(buffer[n-5:n]) == FDT{
 			_, aerr := arlocal.Write(buffer[:n-5])
 			if aerr != nil{
+				//eliminar el archivo porque no se pudo crear correctamente
 				log.Println(aerr)
 				break
 			}
@@ -56,11 +64,9 @@ func hCliente(conn net.Conn){
 		}
 
 		if err != nil{
-			//la condicio io.EOF no funciona, debe ser porque es una conexion y esa condicion no se envia desde el cliente
+			//la condicio io.EOF no funciona. Debe ser porque en una conexion no funciona la condicion io.EOF, o esa condicion no se envia desde el cliente.
 			//a persar de que no funciona la dejo aquí para ver si puedo hacer que funcione
 			if n == 0 && err == io.EOF{
-				//los ultimos bytes antes del erro o EOF
-				// arlocal.Close()
 				log.Println("Archivo recivido")
 				break
 			}
@@ -72,13 +78,13 @@ func hCliente(conn net.Conn){
 	
 		_, aerr := arlocal.Write(buffer[:n])
 		if aerr != nil{
+			//eliminar el archivo porque no se pudo crear correctamente
 			log.Println(aerr)
 			break
 		}
-		
-
-	}
-
+}
+	//los bytes recividos deben coincidir con los enviados
+	log.Println("Bytes recividos", count)
 
 
 
@@ -107,4 +113,5 @@ func hCliente(conn net.Conn){
 	// 	log.Println("Mensaje: ",(string(b[:bc]))) 
 	// }
 	conn.Close()
+	log.Println("Servidor cerrado")
 }
