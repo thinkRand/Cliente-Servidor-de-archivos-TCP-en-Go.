@@ -32,39 +32,41 @@ func nombreTemp()(nombre string){
 	return "archivo"
 }
 
-const BUFFER_TAMANIO int = 1024
 //runtina para comunicarce con el cliente
 func hCliente(conn net.Conn){
 	defer conn.Close() //me aseguro de cerra la conexion en cualquier caso
 	log.Println("Cliente conectado: ", conn.RemoteAddr().String())
-	canal := make(chan string)
-	go responderCliente(conn, canal) //para enviar las respuestas del servidor al cliente
+	cliente := make(chan string) //se reciven mensajes de las rutinas para eviarlas al cliente
+	go responderCliente(conn, cliente) //para enviar las respuestas del servidor al cliente
 	lector := bufio.NewScanner(conn)
 	for lector.Scan(){
 		entrada := lector.Text()
-		interprete(entrada, conn, canal)
+		interprete(entrada, conn, cliente)
+		//cuando el interprete retorna se vuelven a escuchar entradas desde el cliente
 	}
 	log.Println("Servidor cerrado")
 }
 
-func responderCliente(conn net.Conn, chanel <-chan string){
-	for msg := range chanel{
+func responderCliente(conn net.Conn, cliente <-chan string){
+	//en
+	for msg := range cliente{
 		//esta función formatea el string de msg de forma estandar y lo escribe en la conexion
-		log.Println("Se escribio el mensaje en al conexion")
+		//le evio el msg al cliente
 		fmt.Fprintln(conn, msg) //ingnoro los errores
+		log.Println("Se escribio el mensaje",msg,"en la conexion")
 	}
 }
 
-func interprete(entrada string, conn net.Conn, canal chan string){
+func interprete(entrada string, conn net.Conn, cliente chan string){
+	//esto lo are un for con un canal para sincronisar
 	var comando []string
-	//msg guarda el texto mientras recorro todo el contenido en el canal
+	//msg guarda el texto mientras recorro todo el contenido en el cliente
 	log.Println(entrada)
 	comando = strings.Split(entrada, " ")
 	switch(comando[0]){
-	case "subir":
-		log.Println("Comando subir recivido")
-		canal<- "server: Comando subir reconocido, espera mientras mientras se arregla todo en el servidor"
-		subirArchivo(conn, canal)
+	case "up":
+		log.Println("Solicitud up recivida desde cliente")
+		recivirArchivo(conn, cliente)
 	case "obtener":
 		log.Println("comando obtener recivido")
 	default:
@@ -74,16 +76,18 @@ func interprete(entrada string, conn net.Conn, canal chan string){
 }
 
 
-func subirArchivo(conn net.Conn, canal chan string){
+func recivirArchivo(conn net.Conn, cliente chan<- string){
 		archivo, err := os.Create("archivo")
 		if err != nil{
 			log.Println("No se pudo crear la ruta local para el archivo")
-			canal <- "Error en el servidor, no se puede subir el archivo"
+			cliente <- "error"
 			return
 		}
 		defer archivo.Close() 
-		canal <- "server: Listo parar recivir archivo"
+		BUFFER_TAMANIO := 1024 //1024 bytes
 		buffer := make([]byte, BUFFER_TAMANIO)
+		//servidor listo para recivir archivo
+		cliente <- "ok"
 		var cuenta int 
 		for {
 			n, err := conn.Read(buffer)
@@ -109,4 +113,5 @@ func subirArchivo(conn net.Conn, canal chan string){
 	}
 		//los bytes recividos deben coincidir con los enviados
 		log.Println("Bytes recividos", cuenta)
+		cliente<- "server: archivo recivido"
 }
