@@ -35,7 +35,6 @@ func main(){
 		entrada := terminal.Text()
 		interpretar<- entrada 
 		<- echo //espero a que el mensajes se procese
-		log.Println("Toda la petición fue procesada con exito")
 	}
 	conn.Close()
 }
@@ -45,13 +44,17 @@ func interprete(interpretar <-chan string, peticion chan string, respuesta chan 
 	for entrada := range interpretar{
 		comando := strings.Split(entrada, " ")
 		switch(comando[0]){
+			case "unir":
+				peticion<- entrada
 			case "subir":
 				log.Println("Comando subir")
 				enviarArchivo(comando[1:], conn, respuesta, peticion)
 			case "obtener":
 				log.Println("comando obtener")
+				log.Println("Toda la petición fue procesada con exito")
 			case "salir":
 				log.Println("No puedes salir de este progama ")
+				log.Println("Toda la petición fue procesada con exito")
 			default:
 				log.Println(comando[0], "no es un comando valido")
 			}
@@ -61,11 +64,18 @@ func interprete(interpretar <-chan string, peticion chan string, respuesta chan 
 
 func enviarArchivo(entrada []string, conn net.Conn, respuesta <-chan string, peticion chan<- string){
 	//obtengo el nombre del archivo
-	if len(entrada) <= 0{
-		log.Println("No hay un nombre de archivo para cargar")
+	//se espera que entrada tenga [nombreArchivo] [nombreCanal]
+	//y esta validaciones deberian estar en el interprete
+	if len(entrada) < 2{
+		log.Println("Parametro faltantes: debe ser: subir nombreArchivo nombreCanal")
 		return
 	}
 	archivo := entrada[0]
+	canal := entrada[1]
+	if len (canal) <= 0{
+		log.Println("Parametro faltante: canal")
+		return
+	}
 	//el nombre del archivo no debe tener espacios
 	//Si el nombre del archivo tiene espacios los elimino con TrimSpace
 	ar, err := os.Open(archivo)
@@ -81,11 +91,12 @@ func enviarArchivo(entrada []string, conn net.Conn, respuesta <-chan string, pet
 	// conn.Write([]byte(string(arInfo.Size()))) //el error de impresion tiene que ver con UTF-8
 	
 	//coordino la entrega con el servidor
-	peticion<- "up"
+	peticion<- "up " + canal
 	//me tengo que quedar esperando la respuesta de la conexion
 	rsp := <-respuesta
 	if rsp != "ok"{
-		log.Println("El servidor no está lista para recivir el archivo")
+		log.Println("rsp: ", rsp +"\n")
+		log.Println("El servidor no está listo para recivir el archivo")
 		return
 	}
 	//Envio el archivo
@@ -95,8 +106,10 @@ func enviarArchivo(entrada []string, conn net.Conn, respuesta <-chan string, pet
 		log.Println(err)
 		return
 	}
+	io.Copy(conn, io.Reader(nil))
 	log.Println("Archivo enviado")
 	log.Println("Bytes enviados", n)
+	log.Println("Toda la petición fue procesada con exito")
 }
 
 //envia las peticiones al servidor
@@ -113,9 +126,13 @@ func respuestasServidor(respuesta chan<- string, conn net.Conn){
 	lector := bufio.NewScanner(conn)
 	for lector.Scan(){
 		entrada := lector.Text()
-		//divido entre las comunicaciones internas y los mensajes par ala terminal
-		// if entrada == server: txt... imprime en terminal
-		respuesta<- entrada 
+		//divido entre las comunicaciones internas y los mensajes para la terminal
+		rsp := strings.Split(entrada, " ")
+		if rsp[0] == "server:"{
+			entrada = "---->"+entrada
+			io.Writer(os.Stdout).Write([]byte(entrada))
+		}
+			respuesta<- entrada 
 	}
 	
 }
