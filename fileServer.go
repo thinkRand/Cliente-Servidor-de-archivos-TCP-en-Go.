@@ -9,26 +9,42 @@ import (
 	"fmt"
 )
 
-/*
-	Me toca crear un canal donde los clientes se registren
-	Se me ocurre un contenedor de tipo canal, que almacene todos los clientes conectados
-	a el, que tenga sus propias rutinas para recivir y enviar comandos
 
-	inicialmente voy a lograr que se transmitan mensajes para luego pasar a archivos
 
-	tan sencillo como eso, el canal es un map con todos los clientes registrados en el.
+//6 factoes a tener en cuenta
+// reliability
+// performance
+// responsiveness
+// scalability
+// security
+// capacity
 
-	al unirce a un canal(anotarce en el map) todos los mensajes que envien deben ser enviados al canal
-	por eso debe haber una forma de saber a que canal esta conectado un cliente.
-	puede ser un mapa de nombre canales map[cliente] := canal al que esta conectado
-*/
+
+//la implementación del protocolo se debe encargar de formatear los mensajes.
+//Me refiero a que cualquier mensaje como "canal aprobado" debe ser reconocido
+//si el comando es "canal apropiado" y la regla del protocolo exige que primero va el comando y
+//luego va la carga entonces reconocerio mal el comando anterior.
+//el protocolo debería ser un paquete aparte
+
+type protocolo struct{
+	//constantes de mensajes
+
+	//regla del protocolo. e.j [cmd][opciones][data]
+
+	//methodo Dial, Listen, Accept, para trabajar con un objeto protocol.Conn
+}
+
+//con estas constantes puedo cambiar el protocolo son facilidad
 const (
 	//RESPUESTAS DEL SERVIDOR
 	SERVIDOR_CANAL_APROBADO = "canalaprobado"
+	SERVIDOR_CANAL_NOAPROBADO = "canalanoprobado"
 	SERVIDOR_SALIR_APROBADO = "saliraprobado"
 	SERVIDOR_CONEXION_APROBADO = "conexionaprobada"
 	SERVIDOR_ENVIO_APROBADO = "envioaprobado"
-	SERVIDOR_ERROR = "El comando es invalido" 
+	SERVIDOR_ENVIO_NOAPROBADO = "envionoaprobado"
+	SERVIDOR_ERROR_CMD = "El comando es invalido"
+	SERVIDOR_MSG = "msg" //para crear mensajes estandar sin relevancia para la coordinación, su destion es la pantalla del cliente
 
 
 	//PETICIONES DEL CLIENTE
@@ -36,33 +52,44 @@ const (
 	CLIENTE_SALIR_CANAL = "salir"
 	CLIENTE_CONEXION = "establecerconexion"
 	CLIENTE_ENVIAR_ARCHIVO = "enviararchivo"
+
+	//buffer de lectura de archivos
+	BUFFER_TAMANIO = 1024
 )
 
 
 
+//para crear listas de clientes asociados a un canal
+type Clientes struct{
+	lista map[Cliente]bool
+}
+
 //El canal es donde se registran clientes
 //El canal debe escuchar activamente todos los mensajes que se envian a el, tal como en un chat
-type canal struct{
+type Canal struct{
 	//el nombre de este canal
 	nombre string 
 
 	//Registro de los clientes en este canal
-	clientes map[cliente]bool 
+	clientes map[*Cliente]bool
 
 	//recive todos los mensajes para escribir en el canal, incluso archivos
 	escribir chan string 
 
 	//recive todas la peticiones para unirce a este canal
-	unir <-chan cliente
+	unir chan *Cliente
 
 	//recive todas las peticiones para salir de este canal
-	salir <-chan cliente
+	salir chan *Cliente
 }
 
 
-//iniciar comiensa la rutina de este canal que escucha todos los mensajes que llegan
-func (can *canal) Iniciar(){
-	log.Println("El canal1 esta activo y escuchando")
+//Escucha todos los mensajes que llegan a este canal y le da el tratamiento apropiado
+//si es un cliente nuevo lo registra
+//si un cliente quiere salirce del canal lo elimina del map
+//si es un mensaje lo distribuye a todos en el canal
+func (can *Canal) Iniciar(){
+	log.Println("El", can.nombre," esta abierto")
 	for{
 		select{
 		case cli := <-can.unir:
@@ -80,19 +107,25 @@ func (can *canal) Iniciar(){
 }
 
 
-type cliente struct{
+//para almacenar la referencia a todos los canales disponibles
+type Canales struct{
+	lista map[string]Canal
+}
+
+type Cliente struct{
 	
 	conn net.Conn
 	
 	escribir chan string //para escribir mensajes al cliente
 
-	canal *canal //posiblemente haga cliente.canal.escribir<- msg
+	canales *Canales //para conocer a todos los canales disponibles
 
 }
 
 
+
 //lee los mensajes provenientes del cliente y los manda al interprete de comandos
-func (cli *cliente) Leer(){
+func (cli *Cliente) Leer(){
 	lector := bufio.NewScanner(cli.conn)
 	for lector.Scan(){
 		entrada := lector.Text()
@@ -103,44 +136,38 @@ func (cli *cliente) Leer(){
 
 
 //Toma todos los mensaje para este cliente y se los envia
-func (cli *cliente) Escribir(){
+func (cli *Cliente) Escribir(){
 	for msg := range <-cli.escribir{
-		fmt.Fprintln(cli.conn, msg)
+		fmt.Fprintln(cli.conn, msg) //se ignoran los errores
 	}
 }
 
 
 //Recive los mensajes del cliente y reconocer los comandos para ofrecer el procedimiento adecuado
-func (cli *cliente) Interpretar(entrada string){
-	var comando []string
-	comando = strings.Split(entrada, " ")
-	//segun el protocolo la primera palabra es el comand
+func (cli *Cliente) Interpretar(entrada string){
+	comando := strings.Split(entrada, " ")
+	//segun el protocolo la primera palabra es el comando
 	//el formato es comando valor valor
 	switch(comando[0]){
 
 	case CLIENTE_UNIR_CANAL:
-		//le puedo pasar un mensaje a una rutina del servidor que identifica a cada
-		//canal creado
-
-		if (estaCanalExiste(comnado[1])){
-			//aqui se debe comprobar si el canal existe
-			if canales[comando[1]]{
-
-			}
-			canal1.clientes[cliente] = true
-			cliente<- "server: " + " Estas registrado en " + comando[1] +"\n"
-		}else{
-			cliente<- "server: "+ comando[1] + " no es un canal\n"
+		log.Println("comando",CLIENTE_UNIR_CANAL,"recivido")
+		if _, ok := cli.canales.lista[comando[0]]; !ok {	//true si el canal no existe
+			cli.escribir<- SERVIDOR_CANAL_NOAPROBADO
 		}
-		//el msg debe venir en for up espacio nombreCanal
+		cli.canales.lista[comando[0]].unir<- cli	
+	
 	case CLIENTE_ENVIAR_ARCHIVO:
-		log.Println("Solicitud up recivida desde cliente")
-		//si el nombre del canal esta registrado en el registro de canales del cliente
-		//algo como cliente.canales[comando[1]] == true
-		cliente<- "server: "+ "recivida la peticion >up< en el canal "+ comando[1] + "\n"
-		recivirArchivo(conn, cliente)
+		log.Println("comando",CLIENTE_ENVIAR_ARCHIVO,"recivido")
+		//tengo que comprobar el formato de los mensajes
+		//debe hacer como mínimo comando-nombrecanal-nombreArchivo
+		if len(comando) != 3{
+			cli.escribir<- SERVIDOR_ENVIO_NOAPROBADO
+		} 
+
+		recivirArchivo(cli, comando)
 	default:
-		log.Println(entrada, SERVIDOR_ERROR)
+		log.Println(entrada, SERVIDOR_ERROR_CMD)
 	}
 	return
 }
@@ -152,13 +179,22 @@ func main(){
 	if err 	!= nil{
 		log.Fatal(err)
 	}
-	var canal1 canal
-	canal1.nombre = "canal1"
+
+	canal1 := Canal{
+		nombre: "canal1",
+		clientes: make(map[*Cliente]bool),
+		escribir: make(chan string),
+		unir: make(chan *Cliente),
+		salir: make(chan *Cliente),
+	}	
+
 	go canal1.Iniciar()
 
-	listaCanales := make(map[string]bool) 
-	listaCanales[canal1.nombre] = true
-
+	canales := Canales{
+		lista: make(map[string]Canal),
+	}
+	
+	canales.lista[canal1.nombre] = canal1 
 	
 	log.Println("Servidor activo...")
 	for{
@@ -167,62 +203,62 @@ func main(){
 			//ingnoro las conexines fallidas
 			continue
 		}
-		go handlerCliente(conn, listaCanales)
+		go handlerCliente(conn, canales)
 	}
 }
 
 
 //handler del cliente 
-func handlerCliente(conn net.Conn, listaCanales map[string]bool){
-	var cli cliente
-	cli.conn = conn
-	cli.escribir = make(chan string)
-	defer cli.conn.Close() //me aseguro de cerra la conexion en cualquier caso	
+func handlerCliente(conn net.Conn, canales Canales){
+	cli := Cliente{
+		conn: conn,
+		escribir: make(chan string),
+		canales: &canales,
+	}
+
+	//invalid memory addres or pointer nil dereference
+	defer cli.conn.Close() 	
 	log.Println("Cliente conectado: ", cli.conn.RemoteAddr().String())
 
-	//me progunto como puedo agregar la lista de canales como una variable del cliente
-	//cli.listaCanales = ListaCanales
-	//se me ocurre que todos los cliente entren por defecto a un canl default o sala de espera
-	//en la sala de espera se conoce la lista de todos los canales, entonces aqui el interprete
-	//de la sala de espera puede puede procesar la peticion de union de los clientes
-	//con el uso de if listaCanales[comando] == true 
-
 	go cli.Escribir() //para enviar los mensajes al cliente
-	cli.Leer() //se mantiene escuchado al cliente
+	cli.Leer() //para recivir los mensajes del cliente
 	log.Println("El cliente ",cli.conn.RemoteAddr().String(),"se desconecto")
 }
 
 
-
-func recivirArchivo(conn net.Conn, cliente chan<- string){
-		//aquí estamos en fase de comunicación interna. Ningun mensaje comiensa con >server:<
-			archivo, err := os.Create("archivo")
+//maneja la subida de un archivo desde el cliente
+func recivirArchivo(cli *Cliente, entrada []string){
+	//entrada debe ser cmd / canal / nombre archivo
+			archivo, err := os.Create(entrada[3])
 			if err != nil{
-				log.Println("No se pudo crear la ruta local para el archivo")
-				cliente <- "error"
+				log.Println("No se pudo crear la ruta local para el archivo",entrada[3])
+				cli.escribir<- SERVIDOR_ENVIO_NOAPROBADO
 				return
 			}
 			defer archivo.Close() 
-			BUFFER_TAMANIO := 1024 //1024 bytes
 			buffer := make([]byte, BUFFER_TAMANIO)
+			
 			//servidor listo para recivir archivo
-			cliente <- "ok"
+			cli.escribir<- SERVIDOR_ENVIO_APROBADO
 			var cuenta int 
 			for {
-				n, err := conn.Read(buffer)
+				n, err := cli.conn.Read(buffer)
 				cuenta+=n
 
 				if err != nil{
 					//posible desconexion
 					//se debe eliminar el archivo
+					defer os.Remove(entrada[3])
 					log.Fatal(err)
+					return
 				}
 			
 				_, aerr := archivo.Write(buffer[:n])
 				if aerr != nil{
 					//eliminar el archivo porque no se pudo crear correctamente
-					log.Println(aerr)
-					break
+					defer os.Remove(entrada[3])
+					log.Fatal(aerr)
+					return
 				}
 
 				if n < BUFFER_TAMANIO {
@@ -232,11 +268,47 @@ func recivirArchivo(conn net.Conn, cliente chan<- string){
 		}
 			//los bytes recividos deben coincidir con los enviados
 			log.Println("Bytes recividos", cuenta)
-			//protocolo de mensajes nomal + msg
-			cliente<- "server:" + " archivo recivido"
+			//protocolo de mensajes normales: msg(cmd) + UnMensaje
+			cli.escribir<- SERVIDOR_MSG + " " + "Archivo recivido, bytes totales: " + fmt.Sprintf("%T",cuenta)
 }
 
 //para crear nombres temporales para el archivo en caso de ser necesario
 func nombreTemp()(nombre string){
 	return "archivo"
+}
+
+
+//el servidor es un canal en si mismo que permite redirigir el flujo de bytes o almacena
+//el archivo localmente para luego enviarlo sobre el canal, en cuyo caso lo debe almacenar.
+//me gusta más la opción uno.
+//lo que pasa con la opción uno es que el flujo de datos se debe copiar a cada cliente por lo que
+//necesito una forma para copiar un stream y luego copiarlo a cada cliente
+//al como:
+// n, err := conn.read(stream)
+//	for everu cli{
+//		cli.escribir<- stream //escribir es un rutina aparte que escribe al cliente
+//	}
+//eveftivamente es un de distribucion  multiplex en el que entra un stream y sale cli*streams
+//
+//El siguiente problema es de saruracion del canal cuando dos cliente quieren transmitir un archivo al mismo
+//tiempo. Como deberiá transportarce la información sobre el canal?
+//Pues este problema no es nuevo y seguro ya tiene una solución estandar.
+//cuando muchos clientes intentan enviar bytes al mismo canal se genera un cuello de botella
+//El proceso es más o menos así:
+//cliente>>>bytes>>>rutinaRead>>>>única Rutina readCanal>>>Única runtina writeCanal
+
+//hay esta el mayor cuello de botella jamás antes visto
+
+
+func servirArchivo(path string, canal string){
+	//abro el archivo
+	//lo envio al canal
+	//cierro el archivo
+}
+
+
+
+func respuestaCliente(clienteWriter string, peticion string){
+	//responder al cliente segun al petición
+	//seguramente con cli.interpretar
 }

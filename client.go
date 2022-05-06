@@ -11,6 +11,59 @@ import(
 )
 
 
+const (
+	//RESPUESTAS DEL SERVIDOR
+	SERVIDOR_CANAL_APROBADO = "canalaprobado"
+	SERVIDOR_CANAL_NOAPROBADO = "canalanoprobado"
+	SERVIDOR_SALIR_APROBADO = "saliraprobado"
+	SERVIDOR_CONEXION_APROBADO = "conexionaprobada"
+	SERVIDOR_ENVIO_APROBADO = "envioaprobado"
+	SERVIDOR_ENVIO_NOAPROBADO = "envionoaprobado"
+	SERVIDOR_ERROR_CMD = "El comando es invalido"
+	SERVIDOR_MSG = "msg" //para crear mensajes estandar sin relevancia para la coordinación, su destion es la pantalla del cliente
+
+
+	//PETICIONES DEL CLIENTE
+	CLIENTE_UNIR_CANAL = "unir"
+	CLIENTE_SALIR_CANAL = "salir"
+	CLIENTE_CONEXION = "establecerconexion"
+	CLIENTE_ENVIAR_ARCHIVO = "enviararchivo"
+	CLIENTE_ERROR_CMD = "El comando es invalido"
+)
+
+
+
+
+//para agrupar los dos canales del servidor, peticiones y respuestas
+type Servidor struct{
+
+	conn net.Conn
+
+	peticion chan string
+
+	respuesta chan string
+}
+
+//inicia la lectura sobre la conexion de este servidor
+func (s *Servidor) Leer(){
+	lector := bufio.NewScanner(s.conn)
+	for lector.Scan(){
+		entrada := lector.Text()
+		//debo filtrar la entrada, o la entrada debe ir directo al interprete
+		//y el interprete desempaquetara la respuesta de la forma correspondiente
+
+		s.respuesta<- entrada //las respuestas las atienden las rutinas o la rutina que escribe en la terminal
+	}
+}
+
+//Permite escribir sobre la conexion con el servidor todos los mensaje entrantes por el canal
+//de peticiones
+func (s *Servidor) Escribir(){
+	for msg := range s.peticion{
+		fmt.Fprintln(s.conn, msg) //msg es formateado como cade de texto y enviado por la conexion, termina con  \n
+	}
+}
+
 
 
 func main(){
@@ -18,48 +71,61 @@ func main(){
 	if err != nil{
 		log.Fatal(err)
 	}
+	defer conn.Close()
 	log.Println("Cliente activo")
-	interpretar := make(chan string) //para comunicar las entradas al interprete de comandos
-	respuesta := make(chan string) //aquí se escriben las respuestas del servidor, para que las demas rutinas las puedan ver
-	peticion := make(chan string) //enviar peticiones al servidor, la rutina peticionServidor escucha este canal para enviar las peticiones al servidor
-	echo := make(chan bool) //para sincronisar
-	
 
-	go interprete(interpretar, peticion, respuesta, echo, conn)
-	go respuestasServidor(respuesta, conn)
-	go peticionServidor(peticion, conn)
+	servidor := Servidor{
+		conn:conn,
+		peticion: make(chan string),
+		respuesta: make(chan string),
+	}
+
+
+	go servidor.Leer()
+	go servidor.Escribir()
 	//la función de aqui abajo parece crear un flujo desde el Stdin a la conexion, no es como que lea lo que hay en stdin y lo envie si no que el
 	//flujo siempre esta abierto.
 	terminal := bufio.NewScanner(os.Stdin)
 	for terminal.Scan(){
 		entrada := terminal.Text()
-		interpretar<- entrada 
-		<- echo //espero a que el mensajes se procese
+		interpretar(entrada, &servidor) //un comando a la vez
 	}
-	conn.Close()
 }
 
 
-func interprete(interpretar <-chan string, peticion chan string, respuesta chan string, echo chan<- bool, conn net.Conn){
-	for entrada := range interpretar{
+func interpretar(entrada string, s *Servidor){
+	
+		//El interprete deberia desempaquetar las repuestas del ciente?
+		//Para despues enviarlas al lugar que corresponda
+		// if rsp[0] == "server:"{
+		// 	entrada = "---->"+entrada
+		// 	io.Writer(os.Stdout).Write([]byte(entrada))
+		// }
+
 		comando := strings.Split(entrada, " ")
 		switch(comando[0]){
 			case "unir":
-				peticion<- entrada
+				//debe existir un mapa entre leguaje comun y el comando, map[unir] = comando/protocolo
+				//el formato debe ser unir canal
+				if len(comando) != 2{
+					log.Println(CLIENTE_ERROR_CMD)
+					return
+				}
+				s.peticion<- CLIENTE_UNIR_CANAL //se queda esperando que alguna rutina lo reciva
+			
 			case "subir":
-				log.Println("Comando subir")
-				enviarArchivo(comando[1:], conn, respuesta, peticion)
-			case "obtener":
-				log.Println("comando obtener")
-				log.Println("Toda la petición fue procesada con exito")
+				//el formato es subir canal archivo
+				if len(comando) != 3{
+					log.Println(CLIENTE_ERROR_CMD)
+					return
+				}
+				//deveria ser algo como formaterMsg(protoMsg, carga) para facilitar las cosas y evitar errores
+				s.peticion<- CLIENTE_ENVIAR_ARCHIVO + " " + comando[1] + " " + comando[2]
 			case "salir":
-				log.Println("No puedes salir de este progama ")
-				log.Println("Toda la petición fue procesada con exito")
+				log.Println("No puedes salir de este programa !=0")
 			default:
-				log.Println(comando[0], "no es un comando valido")
+				log.Println(comando[0], CLIENTE_ERROR_CMD)
 			}
-			echo<- true //permite que la terminal lea la siguiente entrada
-		}
 }
 
 func enviarArchivo(entrada []string, conn net.Conn, respuesta <-chan string, peticion chan<- string){
@@ -122,7 +188,7 @@ func peticionServidor(peticion <-chan string, conn net.Conn){
 }
 
 //anota las respuestas del servidor para que las rutinas puedan acceder a ellas
-func respuestasServidor(respuesta chan<- string, conn net.Conn){
+func mostrarEnTerminal(respuesta chan<- string, conn net.Conn){
 	lector := bufio.NewScanner(conn)
 	for lector.Scan(){
 		entrada := lector.Text()
