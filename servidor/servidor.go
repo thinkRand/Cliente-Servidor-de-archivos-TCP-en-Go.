@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"strings"
 	"fmt"
+	"io"
 )
 
 
@@ -26,13 +27,13 @@ import (
 //luego va la carga entonces reconocerio mal el comando anterior.
 //el protocolo debería ser un paquete aparte
 
-type protocolo struct{
-	//constantes de mensajes
+// type protocolo struct{
+// 	//constantes de mensajes
 
-	//regla del protocolo. e.j [cmd][opciones][data]
+// 	//regla del protocolo. e.j [cmd][opciones][data]
 
-	//methodo Dial, Listen, Accept, para trabajar con un objeto protocol.Conn
-}
+// 	//methodo Dial, Listen, Accept, para trabajar con un objeto protocol.Conn
+// }
 
 //con estas constantes puedo cambiar el protocolo son facilidad
 const (
@@ -52,10 +53,17 @@ const (
 	CLIENTE_SALIR_CANAL = "salir"
 	CLIENTE_CONEXION = "establecerconexion"
 	CLIENTE_ENVIAR_ARCHIVO = "enviararchivo"
+	CLIENTE_ERROR_TERMINAR_ENVIO = "terminar"
+
+	//RESPUESTAS DE LA TERMINAL
+	CLIENTE_ERROR_NUM_PARAMETROS = "El numero de parametros es incorrecto"
+	CLIENTE_ERROR_CMD = "El comando es invalido"
+	
 
 	//buffer de lectura de archivos
 	BUFFER_TAMANIO = 1024
 )
+
 
 
 
@@ -100,6 +108,7 @@ func (can *Canal) Iniciar(){
 		
 		case msg := <-can.escribir:
 			for cli := range can.clientes{
+				log.Println("Canal1 recivio", msg)
 				cli.escribir<-msg
 			}
 		}
@@ -129,28 +138,48 @@ func (cli *Cliente) Leer(){
 	lector := bufio.NewScanner(cli.conn)
 	for lector.Scan(){
 		entrada := lector.Text()
+		log.Println("Recivido:", entrada)
 		cli.Interpretar(entrada) //un interprete por cliente
 		//cuando el interprete retorna se vuelven a escuchar entradas desde el cliente
 	}
 }
 
+//Espera una replica del cliente, un solo mensaje que sera la respuesta para una coordinación interna
+//otro nombre puede ser msgCoordinacionInterna
+func (cli *Cliente) respuestaCliente() (s string){
+	lector := bufio.NewScanner(cli.conn)
+	if lector.Scan(){
+		entrada := lector.Text()
+		return entrada
+	}
+	return "Error de lectura en replicaCliente()"
+}
 
-//Toma todos los mensaje para este cliente y se los envia
+//Toma todos los mensaje para este cliente y se los envía
 func (cli *Cliente) Escribir(){
-	for msg := range <-cli.escribir{
-		fmt.Fprintln(cli.conn, msg) //se ignoran los errores
+	//si aquí abajo coloco <-cli.escribir el for se ejecuta uan ves por cada byte revibido, tengo que averiguar por qué
+	for msg := range cli.escribir{
+		// log.Println("listo para enviar:", msg)
+		_, err := fmt.Fprintln(cli.conn, msg) //se ignoran los errores
+		if err != nil{
+			log.Println(err)
+			continue //hay que seguir escuchando pese a los errores
+		}
+		log.Println("Despachado:", msg)
+		// log.Println("Bytes enviados:", n)
 	}
 }
 
 
 //Recive los mensajes del cliente y reconocer los comandos para ofrecer el procedimiento adecuado
 func (cli *Cliente) Interpretar(entrada string){
+	
 	comando := strings.Split(entrada, " ")
-	//segun el protocolo la primera palabra es el comando
-	//el formato es comando valor valor
+	//formato: [comando] [valor] [valor]
 	switch(comando[0]){
 
 	case CLIENTE_UNIR_CANAL:
+		
 		log.Println("comando",CLIENTE_UNIR_CANAL,"recivido")
 		if _, ok := cli.canales.lista[comando[0]]; !ok {	//true si el canal no existe
 			cli.escribir<- SERVIDOR_CANAL_NOAPROBADO
@@ -158,14 +187,13 @@ func (cli *Cliente) Interpretar(entrada string){
 		cli.canales.lista[comando[0]].unir<- cli	
 	
 	case CLIENTE_ENVIAR_ARCHIVO:
-		log.Println("comando",CLIENTE_ENVIAR_ARCHIVO,"recivido")
-		//tengo que comprobar el formato de los mensajes
-		//debe hacer como mínimo comando-nombrecanal-nombreArchivo
-		if len(comando) != 3{
+		
+		//se espera cmd canal archivo peso
+		if len(comando) != 4{
 			cli.escribir<- SERVIDOR_ENVIO_NOAPROBADO
 		} 
-
 		recivirArchivo(cli, comando)
+	
 	default:
 		log.Println(entrada, SERVIDOR_ERROR_CMD)
 	}
@@ -228,28 +256,49 @@ func handlerCliente(conn net.Conn, canales Canales){
 
 //maneja la subida de un archivo desde el cliente
 func recivirArchivo(cli *Cliente, entrada []string){
-	//entrada debe ser cmd / canal / nombre archivo
-			archivo, err := os.Create(entrada[3])
+	//la entrada era msg /anal /nombreAr/peso
+	//Como msg se desempaqueto se recive: canal / nombre archivo / peso
+			// canal := entrada[1]
+			nombreAr := entrada[2]
+			bcArchivo := entrada[3] //el valor se recive en string
+
+			archivo, err := os.Create("servidor_archivos/"+nombreAr)
 			if err != nil{
-				log.Println("No se pudo crear la ruta local para el archivo",entrada[3])
+				log.Println(err)
 				cli.escribir<- SERVIDOR_ENVIO_NOAPROBADO
 				return
 			}
 			defer archivo.Close() 
 			buffer := make([]byte, BUFFER_TAMANIO)
 			
-			//servidor listo para recivir archivo
 			cli.escribir<- SERVIDOR_ENVIO_APROBADO
+
+			//tengo que escuchar la respuesta del cliente
+			log.Println("Esperando el archivo...")
+			
+			//hacer ese proceso
 			var cuenta int 
+			// var end []byte
 			for {
 				n, err := cli.conn.Read(buffer)
 				cuenta+=n
 
+				// log.Println("estado de transmision",string(buffer[:8]))
+				// end = buffer[8:9]
+				if string(buffer[:8]) == CLIENTE_ERROR_TERMINAR_ENVIO {
+				// if s := string(buffer[:8]); s == "terminar" {
+					os.Remove(entrada[2])
+					log.Println("El envio del archivo se cancelo del lado del cliente")
+					return
+				}
+
+
 				if err != nil{
 					//posible desconexion
+					//EOF ocurre si hay una perdida de conexión
 					//se debe eliminar el archivo
-					defer os.Remove(entrada[3])
-					log.Fatal(err)
+					defer os.Remove(entrada[2])
+					log.Println(err)
 					return
 				}
 			
@@ -257,19 +306,65 @@ func recivirArchivo(cli *Cliente, entrada []string){
 				if aerr != nil{
 					//eliminar el archivo porque no se pudo crear correctamente
 					defer os.Remove(entrada[3])
-					log.Fatal(aerr)
+					log.Println(aerr)
 					return
 				}
 
 				if n < BUFFER_TAMANIO {
 					log.Println("Archivo recivido")
+					// log.Println("Todos los bytes", buffer[:n])
+					archivo.Close()
 					break
 				}
 		}
-			//los bytes recividos deben coincidir con los enviados
+			//cierro el archivo para poder abrirlo nuevamente con el apuntador de la tabla del archivo en 
+			//el principio
+			// io.Pipe()
+			
+			log.Println("Tamaño esperado,", bcArchivo)
 			log.Println("Bytes recividos", cuenta)
-			//protocolo de mensajes normales: msg(cmd) + UnMensaje
-			cli.escribir<- SERVIDOR_MSG + " " + "Archivo recivido, bytes totales: " + fmt.Sprintf("%T",cuenta)
+			if bcArchivo != fmt.Sprintf("%d", cuenta) { //comparación de strings
+				log.Println("Error. Los bytes recividos no son iguales a los bytes enviados por el cliente")
+				
+				os.Remove(nombreAr)
+				cli.escribir<- SERVIDOR_MSG + " " + "Los bytes no coinciden" + fmt.Sprintf("%d",cuenta)
+				return
+			}
+
+			cli.escribir<- SERVIDOR_MSG + " " + "Archivo recivido, bytes totales: " + fmt.Sprintf("%d",cuenta)
+			log.Println("Ahora el archivo debe ser enviado al canal")
+			if can, ok := cli.canales.lista["canal1"]; ok {
+				log.Println("Enviando a canal1...")
+				//re abro el archivo esta vez para lectura
+				ar, err := os.Open("servidor_archivos/"+nombreAr)
+				if err != nil{
+					log.Println(err)
+					return
+				}
+
+				// io.Copy(cli.escribir, ar)
+				b := make([]byte, 1024)
+				for {
+					n, err := ar.Read(b)
+					
+					if err != nil{
+						log.Println(err)
+						log.Println("Error al intentar leer el archivo")
+						can.escribir<- "un mensajillo por el canalsillo"
+						os.Remove(nombreAr)
+						break
+					}
+
+					if n == 0 {
+						log.Println("Archivo enviado al canal")
+						break
+					}
+					
+					can.escribir<- string(b[:n])
+				}
+			}
+
+			log.Println("fin de recivirArchivo")
 }
 
 //para crear nombres temporales para el archivo en caso de ser necesario
@@ -308,7 +403,3 @@ func servirArchivo(path string, canal string){
 
 
 
-func respuestaCliente(clienteWriter string, peticion string){
-	//responder al cliente segun al petición
-	//seguramente con cli.interpretar
-}

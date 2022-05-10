@@ -28,6 +28,11 @@ const (
 	CLIENTE_SALIR_CANAL = "salir"
 	CLIENTE_CONEXION = "establecerconexion"
 	CLIENTE_ENVIAR_ARCHIVO = "enviararchivo"
+	CLIENTE_ERROR_TERMINAR_ENVIO = "terminar"
+
+
+	//RESPUESTAS DE LA TERMINAL
+	CLIENTE_ERROR_NUM_PARAMETROS = "El numero de parametros es incorrecto"
 	CLIENTE_ERROR_CMD = "El comando es invalido"
 )
 
@@ -44,11 +49,12 @@ type Servidor struct{
 	respuesta chan string
 }
 
-//inicia la lectura sobre la conexion de este servidor
+//inicia la lectura sobre la conexion 
 func (s *Servidor) Leer(){
 	lector := bufio.NewScanner(s.conn)
 	for lector.Scan(){
 		entrada := lector.Text()
+		log.Println("Recivido: ", entrada)
 		//debo filtrar la entrada, o la entrada debe ir directo al interprete
 		//y el interprete desempaquetara la respuesta de la forma correspondiente
 
@@ -60,7 +66,8 @@ func (s *Servidor) Leer(){
 //de peticiones
 func (s *Servidor) Escribir(){
 	for msg := range s.peticion{
-		fmt.Fprintln(s.conn, msg) //msg es formateado como cade de texto y enviado por la conexion, termina con  \n
+		fmt.Fprintln(s.conn, msg) //msg es formateado como string y enviado por la conexion, termina con  \n
+		log.Println("Despachado:",msg)
 	}
 }
 
@@ -88,12 +95,12 @@ func main(){
 	terminal := bufio.NewScanner(os.Stdin)
 	for terminal.Scan(){
 		entrada := terminal.Text()
-		interpretar(entrada, &servidor) //un comando a la vez
+		verificarComando(entrada, &servidor) //un comando a la vez
 	}
 }
 
 
-func interpretar(entrada string, s *Servidor){
+func verificarComando(entrada string, s *Servidor){
 	
 		//El interprete deberia desempaquetar las repuestas del ciente?
 		//Para despues enviarlas al lugar que corresponda
@@ -101,90 +108,86 @@ func interpretar(entrada string, s *Servidor){
 		// 	entrada = "---->"+entrada
 		// 	io.Writer(os.Stdout).Write([]byte(entrada))
 		// }
-
 		comando := strings.Split(entrada, " ")
 		switch(comando[0]){
 			case "unir":
 				//debe existir un mapa entre leguaje comun y el comando, map[unir] = comando/protocolo
 				//el formato debe ser unir canal
 				if len(comando) != 2{
-					log.Println(CLIENTE_ERROR_CMD)
+					log.Println(CLIENTE_ERROR_NUM_PARAMETROS)
 					return
 				}
 				s.peticion<- CLIENTE_UNIR_CANAL //se queda esperando que alguna rutina lo reciva
+				//si la peticion es recivida en el canal del servidor entonces continuo con otra cosa
 			
 			case "subir":
-				//el formato es subir canal archivo
+				//El formato es subir canal archivo
+				//se puede hacer un bool, err := veri(comando, "subir")
+				//if err  != nil chacata
 				if len(comando) != 3{
-					log.Println(CLIENTE_ERROR_CMD)
+					log.Println(CLIENTE_ERROR_NUM_PARAMETROS)
 					return
 				}
-				//deveria ser algo como formaterMsg(protoMsg, carga) para facilitar las cosas y evitar errores
-				s.peticion<- CLIENTE_ENVIAR_ARCHIVO + " " + comando[1] + " " + comando[2]
+				enviarArchivo(s, comando)
+
 			case "salir":
 				log.Println("No puedes salir de este programa !=0")
 			default:
-				log.Println(comando[0], CLIENTE_ERROR_CMD)
+				log.Println(CLIENTE_ERROR_CMD, ":",comando[0])
 			}
 }
 
-func enviarArchivo(entrada []string, conn net.Conn, respuesta <-chan string, peticion chan<- string){
-	//obtengo el nombre del archivo
-	//se espera que entrada tenga [nombreArchivo] [nombreCanal]
-	//y esta validaciones deberian estar en el interprete
-	if len(entrada) < 2{
-		log.Println("Parametro faltantes: debe ser: subir nombreArchivo nombreCanal")
-		return
-	}
-	archivo := entrada[0]
-	canal := entrada[1]
-	if len (canal) <= 0{
-		log.Println("Parametro faltante: canal")
-		return
-	}
-	//el nombre del archivo no debe tener espacios
-	//Si el nombre del archivo tiene espacios los elimino con TrimSpace
-	ar, err := os.Open(archivo)
+func enviarArchivo(s *Servidor, parametros []string){
+	//se espera que entrada tenga [cmd][nombreCanal][nombreArchivo] y agrega el peso antes de
+	//enviar la petición
+	
+	//a partir de aquí se esta en la fase de transmisión de archivos, el formato de mensajes es 
+	//en bytes en lugar de strings
+	canal := parametros[1]
+	ruta := parametros[2]
+	
+	
+
+	ar, err := os.Open(ruta)
 	if err != nil{
-		// log.Println("El archivo",archivo,"no se pudo leer")
 		log.Println(err)
 		return
 	}
 	defer ar.Close()
-	// arInfo, err := ar.Stat()
-	//evio informacion del archivo al respuesta
-	// conn.Write([]byte(arInfo.Name())) 
-	// conn.Write([]byte(string(arInfo.Size()))) //el error de impresion tiene que ver con UTF-8
 	
-	//coordino la entrega con el servidor
-	peticion<- "up " + canal
-	//me tengo que quedar esperando la respuesta de la conexion
-	rsp := <-respuesta
-	if rsp != "ok"{
-		log.Println("rsp: ", rsp +"\n")
-		log.Println("El servidor no está listo para recivir el archivo")
+	arInfo, err := ar.Stat()
+	if err != nil{
+		log.Println(err)
+		return
+	}	
+	peso := arInfo.Size()
+	nombreAr := arInfo.Name()
+
+	//cliente encia msg canal nombreAr peso
+	s.peticion<- CLIENTE_ENVIAR_ARCHIVO + " " + canal + " " + nombreAr + " " + fmt.Sprintf("%d",peso)
+	if rsp := <-s.respuesta; rsp == SERVIDOR_ENVIO_APROBADO{
+		log.Println("El servidor acepto la transferencia del archivo")
+		
+	}else if rsp == SERVIDOR_ENVIO_NOAPROBADO{
+		log.Println("El servidor no acepto la transferecia")
+		return
+	}else{
+		log.Println("El servidor respondio con:", rsp)
 		return
 	}
-	//Envio el archivo
-	n , err := io.Copy(conn, ar)
+
+
+	n , err := io.Copy(s.conn, ar)
 	if err != nil{
 		// log.Println("El archivo no se pudo enviar.")
+		s.peticion<- CLIENTE_ERROR_TERMINAR_ENVIO
 		log.Println(err)
 		return
 	}
-	io.Copy(conn, io.Reader(nil))
+	// io.Copy(conn, io.Reader(nil))
 	log.Println("Archivo enviado")
 	log.Println("Bytes enviados", n)
-	log.Println("Toda la petición fue procesada con exito")
-}
-
-//envia las peticiones al servidor
-//para esta rutina el canal peticion es solo para escuchar
-func peticionServidor(peticion <-chan string, conn net.Conn){
-	//escribe la petición a la conexion
-	for p := range peticion{
-		fmt.Fprintln(conn, p) //se ignoran los errores de red como desconexion en cuyo caso esta runita se cerrara porque peticion se cerrara
-	}
+	// log.Println("Toda la petición fue procesada con éxito")
 }
 
 //anota las respuestas del servidor para que las rutinas puedan acceder a ellas
