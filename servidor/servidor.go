@@ -1,13 +1,14 @@
 package main
 
 import (
+	ps "protocolo_simple"
 	"log"
 	"net"
 	"os"
 	"bufio"
 	"strings"
 	"fmt"
-	"io"
+	// "io"
 )
 
 
@@ -21,45 +22,8 @@ import (
 // capacity
 
 
-//la implementación del protocolo se debe encargar de formatear los mensajes.
-//Me refiero a que cualquier mensaje como "canal aprobado" debe ser reconocido
-//si el comando es "canal apropiado" y la regla del protocolo exige que primero va el comando y
-//luego va la carga entonces reconocerio mal el comando anterior.
-//el protocolo debería ser un paquete aparte
 
-// type protocolo struct{
-// 	//constantes de mensajes
-
-// 	//regla del protocolo. e.j [cmd][opciones][data]
-
-// 	//methodo Dial, Listen, Accept, para trabajar con un objeto protocol.Conn
-// }
-
-//con estas constantes puedo cambiar el protocolo son facilidad
 const (
-	//RESPUESTAS DEL SERVIDOR
-	SERVIDOR_CANAL_APROBADO = "canalaprobado"
-	SERVIDOR_CANAL_NOAPROBADO = "canalanoprobado"
-	SERVIDOR_SALIR_APROBADO = "saliraprobado"
-	SERVIDOR_CONEXION_APROBADO = "conexionaprobada"
-	SERVIDOR_ENVIO_APROBADO = "envioaprobado"
-	SERVIDOR_ENVIO_NOAPROBADO = "envionoaprobado"
-	SERVIDOR_ERROR_CMD = "El comando es invalido"
-	SERVIDOR_MSG = "msg" //para crear mensajes estandar sin relevancia para la coordinación, su destion es la pantalla del cliente
-
-
-	//PETICIONES DEL CLIENTE
-	CLIENTE_UNIR_CANAL = "unir"
-	CLIENTE_SALIR_CANAL = "salir"
-	CLIENTE_CONEXION = "establecerconexion"
-	CLIENTE_ENVIAR_ARCHIVO = "enviararchivo"
-	CLIENTE_ERROR_TERMINAR_ENVIO = "terminar"
-
-	//RESPUESTAS DE LA TERMINAL
-	CLIENTE_ERROR_NUM_PARAMETROS = "El numero de parametros es incorrecto"
-	CLIENTE_ERROR_CMD = "El comando es invalido"
-	
-
 	//buffer de lectura de archivos
 	BUFFER_TAMANIO = 1024
 )
@@ -178,24 +142,24 @@ func (cli *Cliente) Interpretar(entrada string){
 	//formato: [comando] [valor] [valor]
 	switch(comando[0]){
 
-	case CLIENTE_UNIR_CANAL:
+	case ps.CLIENTE_UNIR_CANAL:
 		
-		log.Println("comando",CLIENTE_UNIR_CANAL,"recivido")
+		log.Println("comando",ps.CLIENTE_UNIR_CANAL,"recivido")
 		if _, ok := cli.canales.lista[comando[0]]; !ok {	//true si el canal no existe
-			cli.escribir<- SERVIDOR_CANAL_NOAPROBADO
+			cli.escribir<- ps.SERVIDOR_CANAL_NOAPROBADO
 		}
 		cli.canales.lista[comando[0]].unir<- cli	
 	
-	case CLIENTE_ENVIAR_ARCHIVO:
+	case ps.CLIENTE_ENVIAR_ARCHIVO:
 		
 		//se espera cmd canal archivo peso
 		if len(comando) != 4{
-			cli.escribir<- SERVIDOR_ENVIO_NOAPROBADO
+			cli.escribir<- ps.SERVIDOR_ENVIO_NOAPROBADO
 		} 
 		recivirArchivo(cli, comando)
 	
 	default:
-		log.Println(entrada, SERVIDOR_ERROR_CMD)
+		log.Println(entrada, ps.SERVIDOR_ERROR_CMD)
 	}
 	return
 }
@@ -265,13 +229,13 @@ func recivirArchivo(cli *Cliente, entrada []string){
 			archivo, err := os.Create("servidor_archivos/"+nombreAr)
 			if err != nil{
 				log.Println(err)
-				cli.escribir<- SERVIDOR_ENVIO_NOAPROBADO
+				cli.escribir<- ps.SERVIDOR_ENVIO_NOAPROBADO
 				return
 			}
 			defer archivo.Close() 
 			buffer := make([]byte, BUFFER_TAMANIO)
 			
-			cli.escribir<- SERVIDOR_ENVIO_APROBADO
+			cli.escribir<- ps.SERVIDOR_ENVIO_APROBADO
 
 			//tengo que escuchar la respuesta del cliente
 			log.Println("Esperando el archivo...")
@@ -285,7 +249,7 @@ func recivirArchivo(cli *Cliente, entrada []string){
 
 				// log.Println("estado de transmision",string(buffer[:8]))
 				// end = buffer[8:9]
-				if string(buffer[:8]) == CLIENTE_ERROR_TERMINAR_ENVIO {
+				if string(buffer[:8]) == ps.CLIENTE_ERROR_TERMINAR_ENVIO {
 				// if s := string(buffer[:8]); s == "terminar" {
 					os.Remove(entrada[2])
 					log.Println("El envio del archivo se cancelo del lado del cliente")
@@ -327,11 +291,11 @@ func recivirArchivo(cli *Cliente, entrada []string){
 				log.Println("Error. Los bytes recividos no son iguales a los bytes enviados por el cliente")
 				
 				os.Remove(nombreAr)
-				cli.escribir<- SERVIDOR_MSG + " " + "Los bytes no coinciden" + fmt.Sprintf("%d",cuenta)
+				cli.escribir<- ps.SERVIDOR_MSG + " " + "Los bytes no coinciden" + fmt.Sprintf("%d",cuenta)
 				return
 			}
 
-			cli.escribir<- SERVIDOR_MSG + " " + "Archivo recivido, bytes totales: " + fmt.Sprintf("%d",cuenta)
+			cli.escribir<- ps.SERVIDOR_MSG + " " + "Archivo recivido, bytes totales: " + fmt.Sprintf("%d",cuenta)
 			log.Println("Ahora el archivo debe ser enviado al canal")
 			if can, ok := cli.canales.lista["canal1"]; ok {
 				log.Println("Enviando a canal1...")

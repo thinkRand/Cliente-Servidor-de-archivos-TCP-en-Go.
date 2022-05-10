@@ -1,6 +1,7 @@
 package main
 
 import(
+	ps "protocolo_simple"
 	"net"
 	"log"
 	"bufio"
@@ -9,34 +10,6 @@ import(
 	"strings"
 	"fmt"
 )
-
-
-const (
-	//RESPUESTAS DEL SERVIDOR
-	SERVIDOR_CANAL_APROBADO = "canalaprobado"
-	SERVIDOR_CANAL_NOAPROBADO = "canalanoprobado"
-	SERVIDOR_SALIR_APROBADO = "saliraprobado"
-	SERVIDOR_CONEXION_APROBADO = "conexionaprobada"
-	SERVIDOR_ENVIO_APROBADO = "envioaprobado"
-	SERVIDOR_ENVIO_NOAPROBADO = "envionoaprobado"
-	SERVIDOR_ERROR_CMD = "El comando es invalido"
-	SERVIDOR_MSG = "msg" //para crear mensajes estandar sin relevancia para la coordinación, su destion es la pantalla del cliente
-
-
-	//PETICIONES DEL CLIENTE
-	CLIENTE_UNIR_CANAL = "unir"
-	CLIENTE_SALIR_CANAL = "salir"
-	CLIENTE_CONEXION = "establecerconexion"
-	CLIENTE_ENVIAR_ARCHIVO = "enviararchivo"
-	CLIENTE_ERROR_TERMINAR_ENVIO = "terminar"
-
-
-	//RESPUESTAS DE LA TERMINAL
-	CLIENTE_ERROR_NUM_PARAMETROS = "El numero de parametros es incorrecto"
-	CLIENTE_ERROR_CMD = "El comando es invalido"
-)
-
-
 
 
 //para agrupar los dos canales del servidor, peticiones y respuestas
@@ -114,10 +87,10 @@ func verificarComando(entrada string, s *Servidor){
 				//debe existir un mapa entre leguaje comun y el comando, map[unir] = comando/protocolo
 				//el formato debe ser unir canal
 				if len(comando) != 2{
-					log.Println(CLIENTE_ERROR_NUM_PARAMETROS)
+					log.Println(ps.CLIENTE_ERROR_NUM_PARAMETROS)
 					return
 				}
-				s.peticion<- CLIENTE_UNIR_CANAL //se queda esperando que alguna rutina lo reciva
+				s.peticion<- ps.CLIENTE_UNIR_CANAL //se queda esperando que alguna rutina lo reciva
 				//si la peticion es recivida en el canal del servidor entonces continuo con otra cosa
 			
 			case "subir":
@@ -125,7 +98,7 @@ func verificarComando(entrada string, s *Servidor){
 				//se puede hacer un bool, err := veri(comando, "subir")
 				//if err  != nil chacata
 				if len(comando) != 3{
-					log.Println(CLIENTE_ERROR_NUM_PARAMETROS)
+					log.Println(ps.CLIENTE_ERROR_NUM_PARAMETROS)
 					return
 				}
 				enviarArchivo(s, comando)
@@ -133,7 +106,7 @@ func verificarComando(entrada string, s *Servidor){
 			case "salir":
 				log.Println("No puedes salir de este programa !=0")
 			default:
-				log.Println(CLIENTE_ERROR_CMD, ":",comando[0])
+				log.Println(ps.CLIENTE_ERROR_CMD, ":",comando[0])
 			}
 }
 
@@ -164,11 +137,11 @@ func enviarArchivo(s *Servidor, parametros []string){
 	nombreAr := arInfo.Name()
 
 	//cliente encia msg canal nombreAr peso
-	s.peticion<- CLIENTE_ENVIAR_ARCHIVO + " " + canal + " " + nombreAr + " " + fmt.Sprintf("%d",peso)
-	if rsp := <-s.respuesta; rsp == SERVIDOR_ENVIO_APROBADO{
+	s.peticion<- ps.CLIENTE_ENVIAR_ARCHIVO + " " + canal + " " + nombreAr + " " + fmt.Sprintf("%d",peso)
+	if rsp := <-s.respuesta; rsp == ps.SERVIDOR_ENVIO_APROBADO{
 		log.Println("El servidor acepto la transferencia del archivo")
 		
-	}else if rsp == SERVIDOR_ENVIO_NOAPROBADO{
+	}else if rsp == ps.SERVIDOR_ENVIO_NOAPROBADO{
 		log.Println("El servidor no acepto la transferecia")
 		return
 	}else{
@@ -180,7 +153,7 @@ func enviarArchivo(s *Servidor, parametros []string){
 	n , err := io.Copy(s.conn, ar)
 	if err != nil{
 		// log.Println("El archivo no se pudo enviar.")
-		s.peticion<- CLIENTE_ERROR_TERMINAR_ENVIO
+		s.peticion<- ps.CLIENTE_ERROR_TERMINAR_ENVIO
 		log.Println(err)
 		return
 	}
