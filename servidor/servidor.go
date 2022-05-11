@@ -142,24 +142,24 @@ func (cli *Cliente) Interpretar(entrada string){
 	//formato: [comando] [valor] [valor]
 	switch(comando[0]){
 
-	case ps.CLIENTE_UNIR_CANAL:
+	case ps.C_UNIR_CANAL:
 		
-		log.Println("comando",ps.CLIENTE_UNIR_CANAL,"recivido")
+		log.Println("comando",ps.C_UNIR_CANAL,"recivido")
 		if _, ok := cli.canales.lista[comando[0]]; !ok {	//true si el canal no existe
-			cli.escribir<- ps.SERVIDOR_CANAL_NOAPROBADO
+			cli.escribir<- ps.S_UNIR_RECHAZADO
 		}
 		cli.canales.lista[comando[0]].unir<- cli	
 	
-	case ps.CLIENTE_ENVIAR_ARCHIVO:
+	case ps.C_ENVIAR_ARCHIVO:
 		
 		//se espera cmd canal archivo peso
 		if len(comando) != 4{
-			cli.escribir<- ps.SERVIDOR_ENVIO_NOAPROBADO
+			cli.escribir<- ps.S_ENVIO_RECHAZADO
 		} 
 		recivirArchivo(cli, comando)
 	
 	default:
-		log.Println(entrada, ps.SERVIDOR_ERROR_CMD)
+		log.Println(entrada, ps.S_ERROR_CMD)
 	}
 	return
 }
@@ -229,13 +229,13 @@ func recivirArchivo(cli *Cliente, entrada []string){
 			archivo, err := os.Create("servidor_archivos/"+nombreAr)
 			if err != nil{
 				log.Println(err)
-				cli.escribir<- ps.SERVIDOR_ENVIO_NOAPROBADO
+				cli.escribir<- ps.S_ENVIO_RECHAZADO
 				return
 			}
 			defer archivo.Close() 
 			buffer := make([]byte, BUFFER_TAMANIO)
 			
-			cli.escribir<- ps.SERVIDOR_ENVIO_APROBADO
+			cli.escribir<- ps.S_ENVIO_APROBADO
 
 			//tengo que escuchar la respuesta del cliente
 			log.Println("Esperando el archivo...")
@@ -249,7 +249,7 @@ func recivirArchivo(cli *Cliente, entrada []string){
 
 				// log.Println("estado de transmision",string(buffer[:8]))
 				// end = buffer[8:9]
-				if string(buffer[:8]) == ps.CLIENTE_ERROR_TERMINAR_ENVIO {
+				if string(buffer[:8]) == ps.C_ERROR_TERMINAR_ENVIO {
 				// if s := string(buffer[:8]); s == "terminar" {
 					os.Remove(entrada[2])
 					log.Println("El envio del archivo se cancelo del lado del cliente")
@@ -291,11 +291,11 @@ func recivirArchivo(cli *Cliente, entrada []string){
 				log.Println("Error. Los bytes recividos no son iguales a los bytes enviados por el cliente")
 				
 				os.Remove(nombreAr)
-				cli.escribir<- ps.SERVIDOR_MSG + " " + "Los bytes no coinciden" + fmt.Sprintf("%d",cuenta)
+				cli.escribir<- ps.S_MSG + " " + "Los bytes no coinciden" + fmt.Sprintf("%d",cuenta)
 				return
 			}
 
-			cli.escribir<- ps.SERVIDOR_MSG + " " + "Archivo recivido, bytes totales: " + fmt.Sprintf("%d",cuenta)
+			cli.escribir<- ps.S_MSG + " " + "Archivo recivido, bytes totales: " + fmt.Sprintf("%d",cuenta)
 			log.Println("Ahora el archivo debe ser enviado al canal")
 			if can, ok := cli.canales.lista["canal1"]; ok {
 				log.Println("Enviando a canal1...")

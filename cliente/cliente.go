@@ -6,7 +6,7 @@ import(
 	"log"
 	"bufio"
 	"os"
-	"io"
+	// "io"
 	"strings"
 	"fmt"
 )
@@ -46,6 +46,10 @@ type Servidor struct{
 // }
 
 
+var ESTADO string //los estados posibles del cliente CONECTADO, UNIDO_A_CANAL, ACORDANDO_TRANSMISION
+
+
+
 func main(){
 
 	conn, err := net.Dial("tcp","127.0.0.1:9999")
@@ -53,6 +57,7 @@ func main(){
 		log.Fatal(err)
 	}
 	defer conn.Close()
+	ESTADO = "CONECTADO" 
 	log.Println("Conexion establecida con el servidor")
 
 	
@@ -77,34 +82,28 @@ func main(){
 //Ejecuta dos niveles de validación: valida el formato, y valida los parametros
 func validarEntrada(entrada string, s *Servidor){
 	divisionEntrada := strings.Split(entrada, " ")
+	parametros := make(map[string]string)
 
 	switch(strings.ToUpper(divisionEntrada[0])){
 	case "UNIR":
+		
 		// se espera : UNIR <espeacio> canal . Esto es independiente del protocolo simple
 		if len(divisionEntrada) != 2{
 			log.Println("Entrada invalida. Se requiere unir <espacio> nombre-canal")
 			return
 		}
 
-		parametros := map[string]string{
-			"canal":divisionEntrada[1],
-		}
-		msjExito, msjErr := intermediarTransaccion("unir", parametros, s) 
-		if msjErr != ""{
-			log.Println(msjErr)
-			return
-		}
-
-		if msjExito != ""{
-			log.Println(msjExito)
-			return
-		}
-
-		//si se llega aquí es un error
-		log.Println("ERROR DESCONOCIDO")
+		parametros["canal"] = divisionEntrada[1]
+		comunicarConServidor("unir", parametros, s) 
 
 
 	case "ENVIAR":
+		//solo se puede enviar si se esta en el estado de unido a canal
+		if ESTADO != "UNIDO_A_CANAL"{
+			log.Println("No estas unido a un canal")
+			return
+		}
+
 		// se espera : ENVIAR <espeacio> canal <espacio> ruta-archivo. Esto es independiente del protocolo simple
 		if len(divisionEntrada) != 3{
 			log.Println("Entrada invalida. Se requiere enviar <espacio> nombre-canal <espacio> ruta-archivo")
@@ -127,13 +126,12 @@ func validarEntrada(entrada string, s *Servidor){
 
 		nombreCanal := divisionEntrada[1]
 		nombreArchivo := arInfo.Name()
-		pesoArchivo := fmt.Sprintf("%d", arInfo.Size()) //el peso se envia en string
+		pesoArchivo := fmt.Sprintf("%d", arInfo.Size()) //el peso se envÍa en string
 		
-		parametros := map[string]string{
-			"nombreArchivo":nombreArchivo, 
-			"pesoArchivo":pesoArchivo, 
-			"canal":nombreCanal}
-		intermediarTransaccion("enviar", parametros, s)
+		parametros["nombreArchivo"] = nombreArchivo 
+		parametros["pesoArchivo"] = pesoArchivo 
+		parametros["canal"] = nombreCanal
+		comunicarConServidor("enviar", parametros, s)
 
 	case "SALIR":
 		//Para salir hay dos opciones: salir del canal o salir completamente del programa
@@ -144,22 +142,17 @@ func validarEntrada(entrada string, s *Servidor){
 		} 
 		
 		if len(divisionEntrada) == 1 {
-			log.Println("Quieres salir del programa... bye")
-			log.Fatal()
+			log.Println("bye...")
+			log.Fatal() //mala forma de terminar
 			return
 		}
 
 
 		if len(divisionEntrada) == 2 {
-			//parametros: nombre-canal
-			//probablemente desde aquí me voy a ir al intermediario
-			//msg := ps.Traducir("salir", parametros)
-			//msg := ps.Empaquetar(msg)
-			//ps.peticion(msg).enviar()
-			//ps.respuesta() //recive la ultima respuesta del servidor
-			return
+			parametros["canal"] = divisionEntrada[1]
+			comunicarConServidor("salir-canal", parametros, s)
 		}
-		return
+		
 
 	case "DESCONECTAR":
 	
@@ -170,40 +163,38 @@ func validarEntrada(entrada string, s *Servidor){
 }
 
 
-//Recive una orden del cliente y usa el protocolo simple para determinar la forma de comunicarce 
-//con el servidor para cumplir con esa orden.
-//Los resultados varian dependiendo de la orden recivida
-func intermediarTransaccion(orden string, parametros map[string]string, s *Servidor)(respuesta string, error string){
-
+//Un proceso intermediario entre el servidor y el cliente
+//Recive una orden y determina la forma de usar el protocolo simple para cumplirla. 
+//Los resultados varian dependiendo de la orden recivida.
+//Las ordenes son unir y enviar. Una de sus caracteristicas es que conoce el protocolo simple
+func comunicarConServidor(orden string, parametros map[string]string, s *Servidor){
+	
 	switch(orden){
 	case "unir":
-		//transforma la orden unir al correspondiente formato en el protocolo simple
-		peticion, err := ps.Traducir("unir", parametros)
-		if err != ""{
-			return "", err
-		}
-		peticion = ps.Empaquetar(peticion) //hace nada, es para demostrar un comportamiento esperado mas adelante
-		rsp, err := ps.HacerPeticion(peticion, s.conn) 
-		if err != "" {
-			return "", err
-		}
+		//ESTADO = "CONECTADO"
 		
-		rsp = ps.Desempaquetar(rsp)
-		if rsp == ps.SERVIDOR_UNIR_APROBADO{
-
-		}else if rsp == ps.SERVIDOR_UNIR_NOAPROBADO{
-			//la respuesta que se vera en la terminal
-			return "", "El servidor rechaso la union al canal"
+		peticion, err := ps.NuevaPeticion("unir", parametros, s.conn)
+		if err != ""{
+			log.Println("DEBUG:", err)
+			return
+		}
+		respuesta := peticion.Enviar() //petición retorna éxito o fracaso
+		if respuesta == "exito" {
+			ESTADO = "UNIDO_A_CANAL"
+			log.Println("Ahora estas unido al canal")
+		}else if respuesta == "fracaso"{
+			//ESTADO = "CONECTADO", el estado actual permanece
+			log.Println("El servidor rechaso la unión al canal")
 		}
 	
 
 	case "enviar":
-	
+		ESTADO = "ACORDANDO_TRANSMISION"
 
 	default:
-		return "", "La orden recivida no se reconoce"
+		log.Println("La orden recivida no se reconoce")
 	}
-	return "","No se recivio una orden"
+	log.Println("No se recivio una orden")
 }
 
 
