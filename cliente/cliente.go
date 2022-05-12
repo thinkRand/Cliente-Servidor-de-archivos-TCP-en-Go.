@@ -11,43 +11,8 @@ import(
 	"fmt"
 )
 
-
-//Probablemente es mas claro decir que este debe ser un Servidor de protocolo simple
-//para que se entienda que recive peticions de protocolo simple y responde de la misma forma
-type Servidor struct{
-
-	conn net.Conn
-
-	// peticion chan string
-
-	// respuesta chan string
-}
-
-// //inicia la lectura sobre la conexion 
-// func (s *Servidor) Leer(){
-// 	lector := bufio.NewScanner(s.conn)
-// 	for lector.Scan(){
-// 		entrada := lector.Text()
-// 		log.Println("Recivido: ", entrada)
-// 		//debo filtrar la entrada, o la entrada debe ir directo al interprete
-// 		//y el interprete desempaquetara la respuesta de la forma correspondiente
-
-// 		s.respuesta<- entrada //las respuestas las atienden las rutinas o la rutina que escribe en la terminal
-// 	}
-// }
-
-// //Permite escribir sobre la conexion con el servidor todos los mensaje entrantes por el canal
-// //de peticiones
-// func (s *Servidor) Escribir(){
-// 	for msg := range s.peticion{
-// 		fmt.Fprintln(s.conn, msg) //msg es formateado como string y enviado por la conexion, termina con  \n
-// 		log.Println("Despachado:",msg)
-// 	}
-// }
-
-
-var ESTADO string //los estados posibles del cliente CONECTADO, UNIDO_A_CANAL, ACORDANDO_TRANSMISION
-
+var estado string //los estados posibles del cliente CONECTADO, UNIDO_A_CANAL, ACORDANDO_TRANSMISION
+var conn net.Conn //la conexion establecida entre este cliente y el servidor
 
 
 func main(){
@@ -57,56 +22,48 @@ func main(){
 		log.Fatal(err)
 	}
 	defer conn.Close()
-	ESTADO = "CONECTADO" 
+	estado = "CONECTADO" 
 	log.Println("Conexion establecida con el servidor")
-
 	
-	servidor := Servidor{
-		conn:conn,
-		// peticion: make(chan string),
-		// respuesta: make(chan string),
-	}
-	// go servidor.Leer()
-	// go servidor.Escribir()
-	
-	//para leer las entradas de la terminal
 	terminal := bufio.NewScanner(os.Stdin)
 	for terminal.Scan(){
-		entrada := terminal.Text() //lee hasta \n
-		validarEntrada(entrada, &servidor) //un comando a la vez
+		entrada := terminal.Text() //lee una cadena de texto hasta \n
+		validarEntrada(entrada) //un comando a la vez
 	}
+
 }
 
 
 //Recive las entradas desde la terminal para validarlas.
 //Ejecuta dos niveles de validación: valida el formato, y valida los parametros
-func validarEntrada(entrada string, s *Servidor){
+func validarEntrada(entrada string){
 	divisionEntrada := strings.Split(entrada, " ")
-	parametros := make(map[string]string)
+	comando := strings.ToUpper(divisionEntrada[0]) //no case sensitive
+	parametros := make(map[string]string) //lis de parametros que acompañan al comando, varian segun el comando
 
-	switch(strings.ToUpper(divisionEntrada[0])){
+	switch(comando){
 	case "UNIR":
 		
-		// se espera : UNIR <espeacio> canal . Esto es independiente del protocolo simple
+		// se espera : UNIR <espeacio> canal.
 		if len(divisionEntrada) != 2{
-			log.Println("Entrada invalida. Se requiere unir <espacio> nombre-canal")
+			log.Println("Entrada invalida. Se requiere: unir <espacio> nombre-canal")
 			return
 		}
-
 		parametros["canal"] = divisionEntrada[1]
-		comunicarConServidor("unir", parametros, s) 
+		intermediarioClienteServidor("unir", parametros) 
 
 
 	case "ENVIAR":
+
 		//solo se puede enviar si se esta en el estado de unido a canal
-		if ESTADO != "UNIDO_A_CANAL"{
+		if estado != "UNIDO_A_CANAL"{
 			log.Println("No estas unido a un canal")
 			return
 		}
 
 		// se espera : ENVIAR <espeacio> canal <espacio> ruta-archivo. Esto es independiente del protocolo simple
 		if len(divisionEntrada) != 3{
-			log.Println("Entrada invalida. Se requiere enviar <espacio> nombre-canal <espacio> ruta-archivo")
+			log.Println("Entrada invalida. Se requiere: enviar <espacio> nombre-canal <espacio> ruta-archivo")
 			return
 		}
 
@@ -122,40 +79,50 @@ func validarEntrada(entrada string, s *Servidor){
 			log.Println("Error al intentar leer la estructura del archivo")
 			return
 		}
+		ar.Close()
 		//validación completada
 
 		nombreCanal := divisionEntrada[1]
 		nombreArchivo := arInfo.Name()
 		pesoArchivo := fmt.Sprintf("%d", arInfo.Size()) //el peso se envÍa en string
 		
+		parametros["rutaArchivo"] = rutaArchivo
 		parametros["nombreArchivo"] = nombreArchivo 
 		parametros["pesoArchivo"] = pesoArchivo 
 		parametros["canal"] = nombreCanal
-		comunicarConServidor("enviar", parametros, s)
+		intermediarioClienteServidor("enviar", parametros)
 
 	case "SALIR":
+		
 		//Para salir hay dos opciones: salir del canal o salir completamente del programa
 		if len(divisionEntrada) > 2 {
 			log.Println("Demaciados parametros para el comado salir: se espera salir <espacio> nombre-canal o")
 			log.Println("salir (sin parametros) para salir completamente del programa")
 			return
 		} 
+
 		
 		if len(divisionEntrada) == 1 {
-			log.Println("bye...")
-			log.Fatal() //mala forma de terminar
-			return
+			if estado == "UNIDO_A_CANAL"{
+				//primero lo saco del canal
+				//luego lo saco del programa
+				return
+			}else if estado == "CONECTADO"{
+				log.Println("Cerrando conexion con el servidor...")
+				intermediarioClienteServidor("desconectar", parametros) //parametros vacios para esta peticion
+				return
+			}
 		}
 
-
-		if len(divisionEntrada) == 2 {
-			parametros["canal"] = divisionEntrada[1]
-			comunicarConServidor("salir-canal", parametros, s)
-		}
 		
-
-	case "DESCONECTAR":
-	
+		if len(divisionEntrada) == 2 {
+			if estado != "UNIDO_A_CANAL"{
+				log.Println("No estas unido a un canal")
+				return
+			}
+			parametros["canal"] = divisionEntrada[1]
+			intermediarioClienteServidor("salir-canal", parametros)
+		}
 
 	default:
 		log.Println("Entrada invalida")
@@ -167,29 +134,29 @@ func validarEntrada(entrada string, s *Servidor){
 //Recive una orden y determina la forma de usar el protocolo simple para cumplirla. 
 //Los resultados varian dependiendo de la orden recivida.
 //Las ordenes son unir y enviar. Una de sus caracteristicas es que conoce el protocolo simple
-func comunicarConServidor(orden string, parametros map[string]string, s *Servidor){
+func intermediarioClienteServidor(orden string, parametros map[string]string){
 	
 	switch(orden){
 	case "unir":
-		//ESTADO = "CONECTADO"
+		//estado = "CONECTADO"
 		
-		peticion, err := ps.NuevaPeticion("unir", parametros, s.conn)
+		peticion, err := ps.NuevaPeticion("unir", parametros, conn)
 		if err != ""{
 			log.Println("DEBUG:", err)
 			return
 		}
 		respuesta := peticion.Enviar() //petición retorna éxito o fracaso
 		if respuesta == "exito" {
-			ESTADO = "UNIDO_A_CANAL"
+			estado = "UNIDO_A_CANAL"
 			log.Println("Ahora estas unido al canal")
 		}else if respuesta == "fracaso"{
-			//ESTADO = "CONECTADO", el estado actual permanece
+			//estado = "CONECTADO", el estado actual permanece
 			log.Println("El servidor rechaso la unión al canal")
 		}
 	
 
 	case "enviar":
-		ESTADO = "ACORDANDO_TRANSMISION"
+		estado = "ACORDANDO_TRANSMISION"
 
 	default:
 		log.Println("La orden recivida no se reconoce")
