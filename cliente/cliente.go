@@ -1,7 +1,7 @@
 package main
 
 import(
-	ps "protocolo_simple"
+	Ps "protocolo_simple"
 	"net"
 	"log"
 	"bufio"
@@ -12,7 +12,47 @@ import(
 )
 
 var estado string //los estados posibles del cliente CONECTADO, UNIDO_A_CANAL, ACORDANDO_TRANSMISION
-var conn net.Conn //la conexion establecida entre este cliente y el servidor
+
+//Una structura a manera de abstracción para representar un conjunto de funciones que generan salidas
+//a la red y reciven entradas. Son procesos intermediario entre el servidor y el cliente que 
+//recive una orden y determina la forma de usar el protocolo simple para cumplirla. 
+//Los resultados varian dependiendo de la orden recivida.
+type IoCliente struct{
+	conn net.Conn
+}
+
+func (cli *IoCliente) UnirCanal(param map[string]string){
+	//estado = "CONECTADO"
+	
+	peticion, err := Ps.NuevaPeticion(cli.conn, "unirCanal", param)
+	if err != ""{
+		log.Println("DEBUG:", err)
+		return
+	}
+
+	err = peticion.Enviar() 
+	if err != "" {
+		log.Println("DEBUG:", err)
+		return 
+	}
+
+	rsp, err := peticion.RecivirRespuesta()
+	if err != ""{
+		log.Println("DEBUG:", err)
+		return 
+	}
+	
+	estado = "UNIDO_A_CANAL"
+	if rsp[0] == Ps.S_UNIR_ACEPTADO{ //creo que no debería ser asi, los detalles de implementación deben permanecer en el paquete
+		log.Println("Te uniste al canal")
+	}else if rsp[0] == Ps.S_UNIR_RECHAZADO{
+		log.Println("Fallo. No estas en el canal")
+	}
+
+}
+
+
+var ioCliente IoCliente
 
 
 func main(){
@@ -24,7 +64,8 @@ func main(){
 	defer conn.Close()
 	estado = "CONECTADO" 
 	log.Println("Conexion establecida con el servidor")
-	
+	ioCliente.conn = conn
+
 	terminal := bufio.NewScanner(os.Stdin)
 	for terminal.Scan(){
 		entrada := terminal.Text() //lee una cadena de texto hasta \n
@@ -50,7 +91,7 @@ func validarEntrada(entrada string){
 			return
 		}
 		parametros["canal"] = divisionEntrada[1]
-		intermediarioClienteServidor("unir", parametros) 
+		ioCliente.UnirCanal(parametros) 
 
 
 	case "ENVIAR":
@@ -90,7 +131,7 @@ func validarEntrada(entrada string){
 		parametros["nombreArchivo"] = nombreArchivo 
 		parametros["pesoArchivo"] = pesoArchivo 
 		parametros["canal"] = nombreCanal
-		intermediarioClienteServidor("enviar", parametros)
+		// intermediarioClienteServidor("enviar", parametros)
 
 	case "SALIR":
 		
@@ -109,7 +150,7 @@ func validarEntrada(entrada string){
 				return
 			}else if estado == "CONECTADO"{
 				log.Println("Cerrando conexion con el servidor...")
-				intermediarioClienteServidor("desconectar", parametros) //parametros vacios para esta peticion
+				// intermediarioClienteServidor("desconectar", parametros) //parametros vacios para esta peticion
 				return
 			}
 		}
@@ -121,7 +162,7 @@ func validarEntrada(entrada string){
 				return
 			}
 			parametros["canal"] = divisionEntrada[1]
-			intermediarioClienteServidor("salir-canal", parametros)
+			// intermediarioClienteServidor("salir-canal", parametros)
 		}
 
 	default:
@@ -129,40 +170,6 @@ func validarEntrada(entrada string){
 	}
 }
 
-
-//Un proceso intermediario entre el servidor y el cliente
-//Recive una orden y determina la forma de usar el protocolo simple para cumplirla. 
-//Los resultados varian dependiendo de la orden recivida.
-//Las ordenes son unir y enviar. Una de sus caracteristicas es que conoce el protocolo simple
-func intermediarioClienteServidor(orden string, parametros map[string]string){
-	
-	switch(orden){
-	case "unir":
-		//estado = "CONECTADO"
-		
-		peticion, err := ps.NuevaPeticion("unir", parametros, conn)
-		if err != ""{
-			log.Println("DEBUG:", err)
-			return
-		}
-		respuesta := peticion.Enviar() //petición retorna éxito o fracaso
-		if respuesta == "exito" {
-			estado = "UNIDO_A_CANAL"
-			log.Println("Ahora estas unido al canal")
-		}else if respuesta == "fracaso"{
-			//estado = "CONECTADO", el estado actual permanece
-			log.Println("El servidor rechaso la unión al canal")
-		}
-	
-
-	case "enviar":
-		estado = "ACORDANDO_TRANSMISION"
-
-	default:
-		log.Println("La orden recivida no se reconoce")
-	}
-	log.Println("No se recivio una orden")
-}
 
 
 

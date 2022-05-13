@@ -6,14 +6,13 @@ import (
 )
 
 
-//reglas que describen el formato exacto que debe tener una petición
-//con len(regla) se conoce el número exacto de campos que debe tener una petición
-//con regla[k] = value se sabe que k es la posicion exacta que debe tener un valor
-//con relag[] = value se conocen todos los campos que se requieren
-var reglaUnirCanal = [1]string{"nombreCanal"} //un solo campo obligatorio (nombreCanal) en la posición 0
-var reglaSalirCanal = [1]string{"nombreCanal"} //un solo campo obligatorio (nombreCanal) en la posición 0
-var reglaDesconectar [0]string //no requiere campos
-var reglaEnviarArchivo = [3]string{"nombreCanal", "nombreArchivo", "pesoArchivo"} //solo 3 campos obligatorios, en el orden descrito
+//reglas que describen el formato exacto que debe tener una petición. 
+//con len(regla) se conoce el número exacto de campos que debe tener una petición. 
+//con regla[k] = value se sabe que k es la posicion exacta que debe tener un valor. 
+//con relag[] = value se conocen todos los campos que se requieren.
+//intente que fueran arreglos para enfatisar su caracter estricto, pero los arreglos complicaron las cosas 
+var reglaDesconectar []string //no requiere campos
+var reglaEnviarArchivo = []string{"nombreCanal", "nombreArchivo", "pesoArchivo"} //solo 3 campos obligatorios, en el orden descrito
 
 
 
@@ -25,7 +24,8 @@ const(
 	S_UNIR_RECHAZADO = "sur"
 	S_ENVIO_APROBADO = "sea"
 	S_ENVIO_RECHAZADO = "ser"
-
+	S_SALIR_ACEPTADO = "ssa"
+	S_SALIR_RECHAZADO = "ssr"
 	//AVISOS DEL SERVIDOR
 	S_IMPOSIBLE_CONTINUAR = "sic"
 
@@ -52,7 +52,6 @@ func registrarMsj(msj string){
 }
 
 
-
 //Una coleccion de informacion relevante para una peticion asi como sus metodos propios
 type peticion struct{
 	
@@ -62,13 +61,55 @@ type peticion struct{
 
 	orden string //La forma del comando en lenguaje comun, UNIR, DESCONECTAR ETC...
 
-	campos map[string]string //lista de campos y sus valores
+	campos map[string]string //lista de campos de una peticion y sus valores
 
-	regla []string //describe el orden exacto que deben tener los campos, y los campos exactos que debe tener la petición
+	regla []string //describe el orden exacto que deben tener los campos, y los campos exactos que debe tener la petición. intente que fuera un arreglo pero no pude
 
-	mFormateado string //la cadena con formato de protocolo simple (strings separados por espacios)
+	msjFormateado string //la cadena con formato de protocolo simple (strings separados por espacios)
 
-	respuestasEsperadas []string //lista de las respuestas esperadas para esta petición
+	respuestas map[string]bool //Lista de las repuestas posibles para esta petición
+
+}
+
+var peticionUnirCanal = peticion{
+		// conn: 
+		campos: make(map[string]string),
+		orden: "unirCanal",
+		codigo: C_UNIR_CANAL, 
+		regla: []string{"nombreCanal"}, //un solo campo obligatorio (nombreCanal) en la posición 0
+		respuestas:  map[string]bool{S_UNIR_ACEPTADO:true, S_UNIR_RECHAZADO:true},
+		msjFormateado: "",
+	}
+
+var peticionSalirCanal = peticion{
+	// conn: 
+	campos: make(map[string]string),
+	orden: "salirCanal",
+	codigo: C_SALIR_CANAL, 
+	regla: []string{"nombreCanal"}, //un solo campo obligatorio (nombreCanal) en la posición 0
+	respuestas:  map[string]bool{S_SALIR_ACEPTADO:true, S_SALIR_RECHAZADO:true},
+	msjFormateado: "",
+}
+
+
+var listaPeticiones = make(map[string]peticion) //guarda el registro de todas las peticiones disponibles 
+
+
+//Crea una peticion del tipo orden con los campos en campos y sobre la conexion en conn
+func NuevaPeticion(conn net.Conn, orden string, campos map[string]string)(p peticion, error string){
+
+	listaPeticiones["unirCanal"] = peticionUnirCanal
+	listaPeticiones["salirCanal"] = peticionSalirCanal
+
+	if pet, ok := listaPeticiones[orden]; !ok{
+		return p,"La orden no existe"
+	}else{
+		//las peticiones vienen preformateadas y solo necesitan la conexion y los campos
+		pet.conn = conn 
+		pet.campos = campos
+		return pet, "" //sin errores
+
+	}
 }
 
 //Ejecuta todo el proceso para enviar esta peticon por la conexion. Los procesos son
@@ -76,45 +117,46 @@ type peticion struct{
 func (p *peticion) Enviar()(error string){
 	
 	p.formatear()
-	bstream := marshal(p.mFormateado)
+	bstream := marshal(p.msjFormateado)
 	_ , err := p.conn.Write(bstream)
 	if err != nil{
 		return err.Error()
 	}		
-	registrarMsj(p.mFormateado) //guardar la cadena enviada en el historial
+	registrarMsj(p.msjFormateado) //guardar la cadena enviada en el historial
 
 	return "" //no hay error
 }
 
 
-
-
 //Recive la respuesta a una peticion ejecutando los procesos de 
 //recivir > desformatear > contruir respuesta > return. Retorna una respuesta o un error si este sucede.
-func (p *peticion) recivirRespuesta()(rsp respuesta, error string){
+func (p *peticion) RecivirRespuesta()(rsp []string, error string){
 
-	buf := make([]byte, 128) //128 es mas que suficiente para recivir una respuesta por ahora
-	n, err := p.conn.Read(buf)
+	var buf [128]byte //128 es mas que suficiente para recivir una respuesta por ahora
+	n, err := p.conn.Read(buf[:])
 	if err != nil{
 		return rsp, err.Error() //vacio y un error 
 	}
 
-	umsj := unmarshal(buf[:n])
+	umsj := unmarshal(buf[:n]) //de bytes a cadena de texto con formato del protocolo
 	registrarMsj(umsj) //actualisa el historial de mensajes 
-	rsp, serr := p.desformatear(umsj)
+	r, serr := p.desformatear(umsj) //de cadena de texto a []strings
 	if serr != "" {
-		return rsp, "No se puedo desformatear el mensje" //vacio y un error
+		return rsp, serr //vacio y un error
 	}
 
-	return rsp, "" 
+	//creo que es buena idea devolver un exito o un fracaso
+	//isi la respuesta es satisfactoria para esta petición return true
+	//si no lo es return false
+	return r, "" 
 }
 
 
-//Transformar la petición al formato del protocolo simple (cadenas de texto separadas por espacios)
+//Transformar la petición al formato del protocolo simple (cadenas de texto separadas por espacios y \n )
 //asegurandoce que la petición tiene el formato correcto
 func (p *peticion) formatear()(error string){
 	
-	p.mFormateado = p.codigo
+	p.msjFormateado = p.codigo
 	if len(p.regla) != len(p.campos){
 		return "Faltan campos"
 	}
@@ -124,109 +166,43 @@ func (p *peticion) formatear()(error string){
 		if valorCampo, ok := p.campos[v]; !ok { //si el campo no existe
 			return "El campo " + p.regla[k] + " es obligatorio"
 		}else{
-			p.mFormateado = " " + valorCampo
+			p.msjFormateado = " " + valorCampo
 		} 
 	
 	}
+	p.msjFormateado += "\n" //fin de mensaje
 	return "" //sin errores
 
 }
+
+
+//Transforma una respues recivida en formato de protocolo simple a un mapa
+//ademas verifica si la respuesta coincide con lo esperado para la petición
+func (p *peticion) desformatear(psformat string)(rsp []string, error string){
+
+	r := strings.Split(psformat, " ")
+	//r[0] = código de respuesta
+	 if v, ok := p.respuestas[r[0]]; !ok && !v { //si es una respuesta inesperada para esta petición
+	 	return rsp, "Respuesta inesperada" //vacio y un error
+	 } 
+	 //si la respuesta es valida para esta petición puedo continuar
+	 return r, error //vacio
+
+}
+
+
 
 //Una coleccion de variables que rigen la estructura y comportamiento de las 
 //respuesta del protocolo simple
 type respuesta struct{
 
-	codigo string //codigo de la respuesta
+	codigo string
 
-	carga string //el contenido del mensaje, usualmente innecesario
+	campos map[string]string
 
-
-
-
+	regla []string
 
 }
-
-//Transforma un mensaje con formato de protocolo simple (cadenas de texto separados por espacios) en datos 
-//manejables que incluyen la respuesta del servidor y la carga si la tiene.
-//ademas de comprobar que el formato de la respuesta es el esperado 
-//se supone que desformatear toma una cadena de texto con codigo de mensaje y carga del mensaje
-//separadas por espacios y lo transforma en una respuesta valida lista para ser operada por
-//el siguiente nivel de abstracción
-//debería retornar un objeto respuesta valido o un error
-//deberia verificar
-//la cantidad de campos debe ser exacta a la cantidad de campos esperados para esta peticion
-//dicha información esta contenida en los valores de la petición
-//segundo cada campo debe contener un valor valido: por ejemplo se esperan siertos codigos exactos
-//dependiendo de la peticion por lo que otros codigos deben arrorjar un error por código inesperado.
-//el valor de los campos pues no tengo como comprobar que estám en el orden correcto, esto puede
-//ser un problema más adelante, pero por ahora continuare con lo que tengo a la mano.
-
-func (p *peticion) desformatear(psformat string)(rsp respuesta, error string){
-
-}
-
-
-
-
-//Ejecuta todos los procesos para entender una orden y gestion el envio de la misma
-//reronar la cadena vacia "" si el proceso termina bien. De otra manera devuel una descripcion
-//del error.
-//deberia hacer un mapa del tipo map[string]func para manejar mas facil los comandos con ["enviar"](param)
-//hacer envio debe hacer uso de la interface correspondiente para enviar, si es cliente o servidor
-func HacerEnvio(orden string, parametros map[string]string, conn net.Conn)(error string){
-	switch(orden){
-		case "unir":
-			//construyo la peticion
-			//la envio
-			//espero al respuesta
-			//ejecuto acciones...
-
-		case "enviar":
-			
-
-		case "desconectar":
-		case "salir-canal":
-		case "terminar-envio":
-		case "crash":
-
-
-		default:
-			return "Orden desconocida"
-	}
-	return "Falta el parametro: orden"
-}
-
-
-//Ejecuta todos los procesa para entender una respuesta del servidor y entrega los resultados
-//los procesos son recivir > unmarshal > desformatear > retornar respuesta
-func LeerRespuesta(conn net.Conn)(respuesta string, parametros map[string]string, serror string){
-	buf := make([]byte, 512) //limite de 511 bytes para la cadena del mensaje, el byte 1 es un codigo de respuesta
-	n, err := conn.Read(buf)
-	if err != nil{
-		return "", parametros, err.Error() //valores vacios y un error
-	}
-
-	umsj := unmarshal(buf[0:n])
-	rsp, param, serr := desformatear(umsj)
-	if serr != "" {
-		return "", parametros, "No se puedo desformatear el mensje" //valores vacios y un error
-	}
-
-	return rsp, param, ""
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 func respuestaDesconectarAceptado()
 
@@ -382,8 +358,8 @@ func respuestaServidorImposibleContinuar()
 //transforma un mensaje en formato de protocolo simple(simple cadena de texto) y lo transforma a un 
 //stream de bytes
 func marshal(msj string)(bstream []byte){
-	//podíra usar fmt?
-	bstream = []byte(msj+"\n")
+	//mejor fmt?
+	bstream = []byte(msj)
 	return bstream
 }
 
