@@ -3,6 +3,7 @@ package protocolo_simple
 import (
 	"net"
 	"strings"
+	// "log"
 )
 
 
@@ -24,8 +25,10 @@ const(
 	S_UNIR_RECHAZADO = "sur"
 	S_ENVIO_APROBADO = "sea"
 	S_ENVIO_RECHAZADO = "ser"
+	S_ARCHIVO_RECIVIDO = "sar"
 	S_SALIR_ACEPTADO = "ssa"
 	S_SALIR_RECHAZADO = "ssr"
+	S_CODIGO_INVALIDO = "sci"
 	//AVISOS DEL SERVIDOR
 	S_IMPOSIBLE_CONTINUAR = "sic"
 
@@ -34,21 +37,27 @@ const(
 	C_IMPOSIBLE_CONTINUAR = "cic"
 
 	//PETICIONES DEL CLIENTE
-	C_UNIR_CANAL = "cun"
+	C_UNIR_CANAL = "cuc"
 	C_SALIR_CANAL = "csc"
-	C_DESCONECTAR = "cc"
+	C_DESCONECTAR = "cd"
 	C_ENVIAR_ARCHIVO = "cea"
-
+	C_ARCHIVO_ENVIADO = "cae"
 	//puedo crear un mapa para las respuestas comunes del servidor. algo como map["sda"] = "El servidor te a desconectado"
 )
 
-
-var LOG []string //todos los mensajes que se envian al servidor y las respuestas que se reciven
+const bufferMsg = 128 //128 bytes maximo por mensaje es mas que suficiente por ahora
+var LOG = make([]string, 0, 1000) //Guarda los mensajes que viene y van entre el cliente y el servior hasta 1000, para probar
 
 
 func registrarMsj(msj string){
-	count := len(LOG) //cuantos registros tengo en el historial
-	LOG[count] = msj //agrega el mensaje a la última posición
+
+	total := len(LOG) //cuantos registros tengo en el historial
+	if total == cap(LOG){
+		return //ya no guardes mas, esta prueba ya duro mucho xd
+	}
+	LOG = LOG[:total+1] //agrego un espacio más
+	LOG[total] = msj //agrega el mensaje a la última posición
+
 }
 
 
@@ -71,15 +80,17 @@ type peticion struct{
 
 }
 
+
 var peticionUnirCanal = peticion{
 		// conn: 
-		campos: make(map[string]string),
-		orden: "unirCanal",
 		codigo: C_UNIR_CANAL, 
+		orden: "unirCanal",
+		campos: make(map[string]string),
 		regla: []string{"nombreCanal"}, //un solo campo obligatorio (nombreCanal) en la posición 0
-		respuestas:  map[string]bool{S_UNIR_ACEPTADO:true, S_UNIR_RECHAZADO:true},
 		msjFormateado: "",
+		respuestas:  map[string]bool{S_UNIR_ACEPTADO:true, S_UNIR_RECHAZADO:true},
 	}
+
 
 var peticionSalirCanal = peticion{
 	// conn: 
@@ -107,15 +118,18 @@ func NuevaPeticion(conn net.Conn, orden string, campos map[string]string)(p peti
 		//las peticiones vienen preformateadas y solo necesitan la conexion y los campos
 		pet.conn = conn 
 		pet.campos = campos
+		// log.Println("en nueva peticon. la peticion tiene forma", pet)
 		return pet, "" //sin errores
 
 	}
 }
 
+
 //Ejecuta todo el proceso para enviar esta peticon por la conexion. Los procesos son
-//formatear la petcion > tranforma a bytes > enviar. Retorna la descripcion de un error si este ocurre.
+//formatear la petcion > marshall > enviar. Retorna la descripcion de un error si este ocurre.
 func (p *peticion) Enviar()(error string){
 	
+	// log.Println("En Enviar...")
 	p.formatear()
 	bstream := marshal(p.msjFormateado)
 	_ , err := p.conn.Write(bstream)
@@ -129,15 +143,16 @@ func (p *peticion) Enviar()(error string){
 
 
 //Recive la respuesta a una peticion ejecutando los procesos de 
-//recivir > desformatear > contruir respuesta > return. Retorna una respuesta o un error si este sucede.
+//recivir > desformatear > unmarshall > return. Retorna una respuesta o un error si este sucede.
 func (p *peticion) RecivirRespuesta()(rsp []string, error string){
 
-	var buf [128]byte //128 es mas que suficiente para recivir una respuesta por ahora
+	//error aqui, siempre arroja que la respuesta es inesperada
+	var buf [bufferMsg]byte
 	n, err := p.conn.Read(buf[:])
 	if err != nil{
 		return rsp, err.Error() //vacio y un error 
 	}
-
+	// log.Println("En recivir respuesta, recivido en bytes:", buf[:n])
 	umsj := unmarshal(buf[:n]) //de bytes a cadena de texto con formato del protocolo
 	registrarMsj(umsj) //actualisa el historial de mensajes 
 	r, serr := p.desformatear(umsj) //de cadena de texto a []strings
@@ -156,6 +171,9 @@ func (p *peticion) RecivirRespuesta()(rsp []string, error string){
 //asegurandoce que la petición tiene el formato correcto
 func (p *peticion) formatear()(error string){
 	
+	// log.Println("En formatear...")
+	//error el mensaje no esta siendo formateado correctamente
+	//solo contiene el nombre del canal
 	p.msjFormateado = p.codigo
 	if len(p.regla) != len(p.campos){
 		return "Faltan campos"
@@ -166,11 +184,13 @@ func (p *peticion) formatear()(error string){
 		if valorCampo, ok := p.campos[v]; !ok { //si el campo no existe
 			return "El campo " + p.regla[k] + " es obligatorio"
 		}else{
-			p.msjFormateado = " " + valorCampo
+			p.msjFormateado += " " + valorCampo
 		} 
 	
 	}
-	p.msjFormateado += "\n" //fin de mensaje
+	// log.Println("Al terminar la peticion tiene la forma:  ", p)
+	p.msjFormateado += "\n" //\n para indicar el fin del mensaje
+	// log.Println("Fin de formateo...")
 	return "" //sin errores
 
 }
@@ -180,8 +200,14 @@ func (p *peticion) formatear()(error string){
 //ademas verifica si la respuesta coincide con lo esperado para la petición
 func (p *peticion) desformatear(psformat string)(rsp []string, error string){
 
-	r := strings.Split(psformat, " ")
+	//rastree el error hasta aqua
+	temp := strings.Trim(psformat,"\n\r") //quita los caracteres de fin de cadena
+	r := strings.Split(temp," ") 
 	//r[0] = código de respuesta
+	// log.Println("En desformatear...")
+	// log.Println("cantidad del split:",len(r))
+	// log.Println("r[0]:", r[0])
+	// log.Println("p.respuestas:", p.respuestas)
 	 if v, ok := p.respuestas[r[0]]; !ok && !v { //si es una respuesta inesperada para esta petición
 	 	return rsp, "Respuesta inesperada" //vacio y un error
 	 } 
@@ -189,170 +215,6 @@ func (p *peticion) desformatear(psformat string)(rsp []string, error string){
 	 return r, error //vacio
 
 }
-
-
-
-//Una coleccion de variables que rigen la estructura y comportamiento de las 
-//respuesta del protocolo simple
-type respuesta struct{
-
-	codigo string
-
-	campos map[string]string
-
-	regla []string
-
-}
-
-func respuestaDesconectarAceptado()
-
-func respuestaUnirAceptado()
-
-func respuestaUnirRechazado()
-
-func respuestaEnvioAceptado()
-
-func respuestaEnvioRechazado()
-
-func respuestaServidorImposibleContinuar() 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Recive un comado y unos parametros para transformar esa información al formato del 
-//protocolo simple (cadenas de texto separadas por espacios)
-//los comados y sus respesctivos parametros son:
-//comando eviar : nombre-archivo, peso-archivo, nombre-canal. 
-//comando unir : nombre-canal. 
-//comado desconectar : (carga vacía). 
-//comado salir-canal : nombre-canal. 
-// func formatear(orden string, parametros map[string]string)(mensaje string, serror string){
-// 	switch(orden){
-
-// 	case "unir":
-		
-// 		//El formato de este mensaje es: código de unir <espacio> nombre-canal 
-// 		if _, ok := parametros["canal"]; !ok{
-// 			return "", "El indice [canal] no existe"
-// 		}
-// 		return C_UNIR_CANAL +" "+ parametros["canal"], ""
-
-	
-// 	case "enviar":
-		
-// 		//El formato de este mensaje es: código de enviar <espacio> nombre-canal <espacio> nombre-archivo <espacio> peso-archivo
-// 		if _, ok := parametros["nombreCanal"]; !ok{
-// 			return "", "El indice [nombreCanal] no existe"
-// 		}
-
-// 		if _, ok := parametros["nombreArchivo"]; !ok{
-// 			return "", "El indice [nombreArchivo] no existe"
-// 		}
-
-// 		if _, ok := parametros["pesoArchivo"]; !ok{
-// 			return "", "El indice [pesoArchivo] no existe"
-// 		}
-
-// 		return C_ENVIAR_ARCHIVO +" "+ parametros["nombreCanal"] +" "+ parametros["nombreArchivo"] +" "+ parametros["pesoArchivo"], ""
-	
-// 	case "desconectar":
-		
-// 		//El formato de este mensaje es: código de desconectar 
-// 		return C_DESCONECTAR, ""
-
-// 	case "salir-canal":
-		
-// 		//El formato de este mensaje es: código de salir-canal <espacio> nombre-canal
-// 		if _, ok := parametros["canal"]; !ok{
-// 			return "", "El indice -canal- no existe"
-// 		}
-// 		return C_SALIR_CANAL +" "+ parametros["canal"], ""
-
-// 	case "terminar-envio":
-		
-// 		//El formato de este mensaje es : código de terminar envio
-// 		return C_IMPOSIBLE_CONTINUAR, ""
-
-
-// 	default:
-// 		return "","Comando desconocido."
-// 	}
-// 	return "", "Comando no especificado" 
-// }
-
-// //Recive un mensaje con formato de protocolo simple (cadenas de texto separados por espacios) y
-// //los transforma en datos manejables que incluyen, la respuesta del servidor y la carga si la tiene. 
-// func desformatear(psmsj string)(rsp string, param map[string]string, serror string){
-// 	registrarMsj(psmsj) //todos los mensajes entrantes se registran
-// 	valores := strings.Split(psmsj, " ")
-// 	cmd := valores[0]
-// 	switch(cmd){
-
-// 	case S_UNIR_ACEPTADO:
-		
-// 		//la carga debe estar vacía
-// 		if len(valores) != 1{
-// 			return "", param, "El formato recivido no ovedece las reglas del protocolo"
-// 		}
-// 		//retorna param y error vacios
-// 		return  "Peticion unir aceptada por el servidor", param, ""
-
-// 	case S_UNIR_RECHAZADO:
-		
-// 		//la carga debe estar vacía
-// 		if len(valores) != 1{
-// 			return "", param, "El formato recivido no ovedece las reglas del protocolo"
-// 		}
-// 		//retorna param y error vacios
-// 		return  "Peticion unir rechazada por el servidor", param, ""
-
-// 	case S_DESCONECTAR_ACEPTADO: 
-
-// 		//la carga debe estar vacía
-// 		if len(valores) != 1{
-// 			return "", param, "El formato recivido no ovedece las reglas del protocolo"
-// 		}
-// 		//retorna param y error vacios
-// 		return  "El servidor te ha desconectado", param, ""
-
-// 	case S_ENVIO_APROBADO:
-
-// 		//la carga debe estar vacía
-// 		if len(valores) != 1{
-// 			return "", param, "El formato recivido no ovedece las reglas del protocolo"
-// 		}
-// 		//retorna param y error vacios
-// 		return  "El servidor esta esperando la transmision del archivo", param, ""
-
-// 	case S_ENVIO_RECHAZADO: 
-		
-// 		//la carga debe estar vacía
-// 		if len(valores) != 1{
-// 			return "", param, "El formato recivido no ovedece las reglas del protocolo"
-// 		}
-// 		//retorna param y error vacios
-// 		return  "El servidor rechazo la transmision del archivo", param, ""
-
-// 	} 
-
-
-
-// 	return cmd, param, "El servidor no envio una respuesta conocida"
-// }
 
 
 //transforma un mensaje en formato de protocolo simple(simple cadena de texto) y lo transforma a un 
@@ -369,3 +231,13 @@ func unmarshal(bstream []byte)(mensaje string){
 	mensaje = string(bstream)
 	return mensaje
 }
+
+// type respuesta struct{
+
+// 	codigo string
+
+// 	campos map[string]string
+
+// 	regla []string
+
+// }

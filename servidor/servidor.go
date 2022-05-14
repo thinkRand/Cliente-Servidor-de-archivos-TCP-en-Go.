@@ -1,7 +1,7 @@
 package main
 
 import (
-	ps "protocolo_simple"
+	Ps "protocolo_simple"
 	"log"
 	"net"
 	"os"
@@ -39,20 +39,17 @@ type Clientes struct{
 //El canal es donde se registran clientes
 //El canal debe escuchar activamente todos los mensajes que se envian a el, tal como en un chat
 type Canal struct{
-	//el nombre de este canal
-	nombre string 
+	
+	nombre string //el nombre de este canal
+	
+	clientes map[*Cliente]bool //Registro de los clientes en este canal
+	
+	escribir chan string  //recive todos los mensajes para escribir en el canal, incluso archivos
+	
+	unir chan *Cliente //recive todas la peticiones para unirce a este canal
 
-	//Registro de los clientes en este canal
-	clientes map[*Cliente]bool
+	salir chan *Cliente	//recive todas las peticiones para salir de este canal
 
-	//recive todos los mensajes para escribir en el canal, incluso archivos
-	escribir chan string 
-
-	//recive todas la peticiones para unirce a este canal
-	unir chan *Cliente
-
-	//recive todas las peticiones para salir de este canal
-	salir chan *Cliente
 }
 
 
@@ -65,14 +62,16 @@ func (can *Canal) Iniciar(){
 	for{
 		select{
 		case cli := <-can.unir:
-			can.clientes[cli] = true
+			log.Println(can.nombre,":: Cliente recivido")
+			can.clientes[cli] = true //el canal conoce al cliente ahora
+			cli.canal = can //el cliente conoce al canal ahora
 		
 		case cli := <-can.salir:
 			delete(can.clientes, cli)
 		
 		case msg := <-can.escribir:
 			for cli := range can.clientes{
-				log.Println("Canal1 recivio", msg)
+				log.Println(can.nombre,"::redirigiendo",msg)
 				cli.escribir<-msg
 			}
 		}
@@ -89,12 +88,12 @@ type Cliente struct{
 	
 	conn net.Conn
 	
-	escribir chan string //para escribir mensajes al cliente
+	escribir chan string //Para escribir mensajes al cliente
 
-	canales *Canales //para conocer a todos los canales disponibles
+	canales *Canales //Lista de canales que existen
 
+	canal *Canal //El canal done este cliente está registrado 
 }
-
 
 
 //lee los mensajes provenientes del cliente y los manda al interprete de comandos
@@ -102,8 +101,8 @@ func (cli *Cliente) Leer(){
 	lector := bufio.NewScanner(cli.conn)
 	for lector.Scan(){
 		entrada := lector.Text()
-		log.Println("Recivido:", entrada)
-		cli.Interpretar(entrada) //un interprete por cliente
+		log.Println("Recivido::", entrada)
+		cli.Interpretar(entrada) //se interpreta uno a la vez, es sincrono, a diferencia de escribir que es asincrono
 		//cuando el interprete retorna se vuelven a escuchar entradas desde el cliente
 	}
 }
@@ -121,45 +120,62 @@ func (cli *Cliente) respuestaCliente() (s string){
 
 //Toma todos los mensaje para este cliente y se los envía
 func (cli *Cliente) Escribir(){
-	//si aquí abajo coloco <-cli.escribir el for se ejecuta uan ves por cada byte revibido, tengo que averiguar por qué
 	for msg := range cli.escribir{
-		// log.Println("listo para enviar:", msg)
 		_, err := fmt.Fprintln(cli.conn, msg) //se ignoran los errores
 		if err != nil{
 			log.Println(err)
 			continue //hay que seguir escuchando pese a los errores
 		}
-		log.Println("Despachado:", msg)
-		// log.Println("Bytes enviados:", n)
+		log.Println("Despachado::", msg)
 	}
 }
 
 
 //Recive los mensajes del cliente y reconocer los comandos para ofrecer el procedimiento adecuado
+//deberia seraprace en dos partes ioServidor y servicios. Pero no hay tiempo por ahora.
 func (cli *Cliente) Interpretar(entrada string){
 	
 	comando := strings.Split(entrada, " ")
-	//formato: [comando] [valor] [valor]
+	//formato: [comando] [...valores]
 	switch(comando[0]){
 
-	case ps.C_UNIR_CANAL:
+	case Ps.C_UNIR_CANAL:
 		
-		log.Println("comando",ps.C_UNIR_CANAL,"recivido")
-		if _, ok := cli.canales.lista[comando[0]]; !ok {	//true si el canal no existe
-			cli.escribir<- ps.S_UNIR_RECHAZADO
+		if _, ok := cli.canales.lista[comando[1]]; !ok {	//true si el canal no existe
+			log.Println("El canal no existe, lo que existe es", cli.canales.lista)
+			cli.escribir<- Ps.S_UNIR_RECHAZADO //se responde el mensaje adecuado
 		}
-		cli.canales.lista[comando[0]].unir<- cli	
-	
-	case ps.C_ENVIAR_ARCHIVO:
+		cli.canales.lista[comando[1]].unir<- cli //se registra al cliente en el canal
 		
-		//se espera cmd canal archivo peso
+		cli.escribir<- Ps.S_UNIR_ACEPTADO	//se responde al cliente el mensaje adecuado
+		
+	
+	case Ps.C_ENVIAR_ARCHIVO:
+		
+		//se espera enviar canal archivo peso
 		if len(comando) != 4{
-			cli.escribir<- ps.S_ENVIO_RECHAZADO
+			cli.escribir<- Ps.S_ENVIO_RECHAZADO
 		} 
+
+		if cli.canal == nil{
+			log.Println("El cliente no esta en un canal")
+			cli.escribir<- Ps.S_ENVIO_RECHAZADO
+			return
+		}
+
 		recivirArchivo(cli, comando)
 	
 	default:
-		log.Println(entrada, ps.S_ERROR_CMD)
+		// log.Println("Peticion invalida:", entrada)
+		// cli.escribir<- Ps.S_CODIGO_INVALIDO //se responde el mensaje adecuado
+	
+		log.Println("Se presume entrada para el canal")
+		if cli.canal != nil{
+			cli.canal.escribir<- strings.ToUpper(entrada) //echo xd
+		}else{
+			log.Println("El cliente no esta en un canal")
+			cli.escribir<- "no estas en un canal viejo..."
+		}
 	}
 	return
 }
@@ -206,9 +222,9 @@ func handlerCliente(conn net.Conn, canales Canales){
 		conn: conn,
 		escribir: make(chan string),
 		canales: &canales,
+		//canal //no registrado en un canal por ahora
 	}
 
-	//invalid memory addres or pointer nil dereference
 	defer cli.conn.Close() 	
 	log.Println("Cliente conectado: ", cli.conn.RemoteAddr().String())
 
@@ -218,152 +234,93 @@ func handlerCliente(conn net.Conn, canales Canales){
 }
 
 
-//maneja la subida de un archivo desde el cliente
+//Funcion de prueba que maneja la subida de un archivo desde el cliente
 func recivirArchivo(cli *Cliente, entrada []string){
-	//la entrada era msg /anal /nombreAr/peso
-	//Como msg se desempaqueto se recive: canal / nombre archivo / peso
+	//El formato es enviar canal archivo peso
 			// canal := entrada[1]
 			nombreAr := entrada[2]
-			bcArchivo := entrada[3] //el valor se recive en string
+			pesoAr := entrada[3] //el valor se recive en string
 
 			archivo, err := os.Create("servidor_archivos/"+nombreAr)
 			if err != nil{
 				log.Println(err)
-				cli.escribir<- ps.S_ENVIO_RECHAZADO
+				cli.escribir<- Ps.S_ENVIO_RECHAZADO
 				return
 			}
 			defer archivo.Close() 
 			buffer := make([]byte, BUFFER_TAMANIO)
 			
-			cli.escribir<- ps.S_ENVIO_APROBADO
+			cli.escribir<- Ps.S_ENVIO_APROBADO 
 
 			//tengo que escuchar la respuesta del cliente
 			log.Println("Esperando el archivo...")
 			
-			//hacer ese proceso
 			var cuenta int 
-			// var end []byte
 			for {
 				n, err := cli.conn.Read(buffer)
 				cuenta+=n
 
-				// log.Println("estado de transmision",string(buffer[:8]))
-				// end = buffer[8:9]
-				if string(buffer[:8]) == ps.C_ERROR_TERMINAR_ENVIO {
-				// if s := string(buffer[:8]); s == "terminar" {
-					os.Remove(entrada[2])
-					log.Println("El envio del archivo se cancelo del lado del cliente")
-					return
-				}
-
-
 				if err != nil{
-					//posible desconexion
 					//EOF ocurre si hay una perdida de conexión
-					//se debe eliminar el archivo
-					defer os.Remove(entrada[2])
+					defer os.Remove("servidor_archivos/"+nombreAr) //se debe eliminar el archivo
 					log.Println(err)
 					return
 				}
 			
 				_, aerr := archivo.Write(buffer[:n])
 				if aerr != nil{
-					//eliminar el archivo porque no se pudo crear correctamente
-					defer os.Remove(entrada[3])
+					defer os.Remove("servidor_archivos/"+nombreAr) //eliminar el archivo porque no se pudo crear correctamente
 					log.Println(aerr)
 					return
 				}
 
 				if n < BUFFER_TAMANIO {
-					log.Println("Archivo recivido")
+					log.Println("Trasmision terminada, se presume recepcion completada")
 					// log.Println("Todos los bytes", buffer[:n])
 					archivo.Close()
 					break
 				}
 		}
-			//cierro el archivo para poder abrirlo nuevamente con el apuntador de la tabla del archivo en 
-			//el principio
-			// io.Pipe()
+
+		//notifico al cliente que se recivo todo el archivo, se espera confirmacion para saber si el archivo fue enviado
+		cli.escribir<- Ps.S_ARCHIVO_RECIVIDO + " " + "Archivo recivido, bytes totales: " + fmt.Sprintf("%d",cuenta)
 			
-			log.Println("Tamaño esperado,", bcArchivo)
-			log.Println("Bytes recividos", cuenta)
-			if bcArchivo != fmt.Sprintf("%d", cuenta) { //comparación de strings
-				log.Println("Error. Los bytes recividos no son iguales a los bytes enviados por el cliente")
+		
+		//Esperar que el cliente envie la confirmacion de haber enviado el archvio completo
+		log.Println("Esperando confirmacion del cliente...")
+		
+		b := make([]byte, 128)
+		n, err := cli.conn.Read(b)
+		if err != nil{
+			os.Remove("servidor_archivos/"+nombreAr)
+			log.Println(err)
+			return
+		}
+
+		// log.Println("Debug:: bytes recividos", b[:n])
+		temp := string(b[:n])
+		// log.Println("Debug::temp:", temp)
+		recivido := strings.Trim(temp, "\n")
+		// log.Println("Debug::con triem", recivido)
+		if recivido != Ps.C_ARCHIVO_ENVIADO {
+			log.Println("El cliente envio el siguiente mensaje:", recivido)
+			os.Remove("servidor_archivos/"+nombreAr)
+			return
+		}
+		log.Println("El cliente confirmo que envio el archivo")
+
+		//Verificar la integridad del archivo recivido
+		log.Println("Bytes esperados,", pesoAr)
+		log.Println("Bytes recividos", cuenta)
+		if pesoAr != fmt.Sprintf("%d", cuenta) { //comparación de strings
 				
-				os.Remove(nombreAr)
-				cli.escribir<- ps.S_MSG + " " + "Los bytes no coinciden" + fmt.Sprintf("%d",cuenta)
-				return
-			}
+			log.Println("Error. Los bytes recividos no son iguales a los bytes enviados por el cliente")
+			cli.escribir<- Ps.S_IMPOSIBLE_CONTINUAR + " " + "Los bytes no coinciden" + fmt.Sprintf("%d",cuenta)
+			os.Remove("servidor_archivos/"+nombreAr) //mejor usar archivo.path() o algo asi
+			
+			return
+		}
 
-			cli.escribir<- ps.S_MSG + " " + "Archivo recivido, bytes totales: " + fmt.Sprintf("%d",cuenta)
-			log.Println("Ahora el archivo debe ser enviado al canal")
-			if can, ok := cli.canales.lista["canal1"]; ok {
-				log.Println("Enviando a canal1...")
-				//re abro el archivo esta vez para lectura
-				ar, err := os.Open("servidor_archivos/"+nombreAr)
-				if err != nil{
-					log.Println(err)
-					return
-				}
-
-				// io.Copy(cli.escribir, ar)
-				b := make([]byte, 1024)
-				for {
-					n, err := ar.Read(b)
-					
-					if err != nil{
-						log.Println(err)
-						log.Println("Error al intentar leer el archivo")
-						can.escribir<- "un mensajillo por el canalsillo"
-						os.Remove(nombreAr)
-						break
-					}
-
-					if n == 0 {
-						log.Println("Archivo enviado al canal")
-						break
-					}
-					
-					can.escribir<- string(b[:n])
-				}
-			}
-
-			log.Println("fin de recivirArchivo")
+		log.Println("Lado del servidor cerrado. Escuchando nuevas peticiones")
+			//fin de prueba
 }
-
-//para crear nombres temporales para el archivo en caso de ser necesario
-func nombreTemp()(nombre string){
-	return "archivo"
-}
-
-
-//el servidor es un canal en si mismo que permite redirigir el flujo de bytes o almacena
-//el archivo localmente para luego enviarlo sobre el canal, en cuyo caso lo debe almacenar.
-//me gusta más la opción uno.
-//lo que pasa con la opción uno es que el flujo de datos se debe copiar a cada cliente por lo que
-//necesito una forma para copiar un stream y luego copiarlo a cada cliente
-//al como:
-// n, err := conn.read(stream)
-//	for everu cli{
-//		cli.escribir<- stream //escribir es un rutina aparte que escribe al cliente
-//	}
-//eveftivamente es un de distribucion  multiplex en el que entra un stream y sale cli*streams
-//
-//El siguiente problema es de saruracion del canal cuando dos cliente quieren transmitir un archivo al mismo
-//tiempo. Como deberiá transportarce la información sobre el canal?
-//Pues este problema no es nuevo y seguro ya tiene una solución estandar.
-//cuando muchos clientes intentan enviar bytes al mismo canal se genera un cuello de botella
-//El proceso es más o menos así:
-//cliente>>>bytes>>>rutinaRead>>>>única Rutina readCanal>>>Única runtina writeCanal
-
-//hay esta el mayor cuello de botella jamás antes visto
-
-
-func servirArchivo(path string, canal string){
-	//abro el archivo
-	//lo envio al canal
-	//cierro el archivo
-}
-
-
-

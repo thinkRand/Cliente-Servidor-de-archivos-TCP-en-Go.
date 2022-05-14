@@ -6,7 +6,7 @@ import(
 	"log"
 	"bufio"
 	"os"
-	// "io"
+	"io"
 	"strings"
 	"fmt"
 )
@@ -21,18 +21,23 @@ type IoCliente struct{
 	conn net.Conn
 }
 
-func (cli *IoCliente) UnirCanal(param map[string]string){
+
+//Utilisa el protocolo para crear la peticion adecuada y enviarla. Despues espera la respuesta
+//y notifica el resultado obtenido
+func (ioCli *IoCliente) UnirCanal(nombreCanal string)(exito bool, error string){
 	//estado = "CONECTADO"
 	
-	peticion, err := Ps.NuevaPeticion(cli.conn, "unirCanal", param)
-	if err != ""{
-		log.Println("DEBUG:", err)
+	var campos = map[string]string{"nombreCanal":nombreCanal} //campos necesarios para esta petición
+
+	peticion, serr := Ps.NuevaPeticion(ioCli.conn, "unirCanal", campos)
+	if serr != "" {
+		log.Println("DEBUG:", serr)
 		return
 	}
-
-	err = peticion.Enviar() 
-	if err != "" {
-		log.Println("DEBUG:", err)
+	//la peticion paso la prueba
+	serr = peticion.Enviar() 
+	if serr != "" {
+		log.Println("DEBUG:", serr)
 		return 
 	}
 
@@ -41,15 +46,128 @@ func (cli *IoCliente) UnirCanal(param map[string]string){
 		log.Println("DEBUG:", err)
 		return 
 	}
-	
-	estado = "UNIDO_A_CANAL"
-	if rsp[0] == Ps.S_UNIR_ACEPTADO{ //creo que no debería ser asi, los detalles de implementación deben permanecer en el paquete
-		log.Println("Te uniste al canal")
+
+	if rsp[0] == Ps.S_UNIR_ACEPTADO{
+		return true, "" //exito
 	}else if rsp[0] == Ps.S_UNIR_RECHAZADO{
-		log.Println("Fallo. No estas en el canal")
+		return false,"" //no exito xd
+	}else{
+		log.Println("DEBUG: Se recivio una respuesta incoerente")
+		return false, "La respuesta recivida no es acorde a la peticon"
 	}
 
 }
+
+//Funcion de prueba para enviar archivos al canal
+func (ioC *IoCliente) EnviarArchivo(rutaArchivo, nombreArchivo, pesoArchivo, nombreCanal string){
+	
+	//primero sin usar el protocolo a manera de prueba
+	// 1. enviar el archivo al servidor
+	// 2. enviar al canal
+	// 3. enviar al servidor y hacer echo al cliente sobre el canal lul!
+ 	peticion := Ps.C_ENVIAR_ARCHIVO + " " + nombreCanal + " " + nombreArchivo + " " + pesoArchivo + "\n"
+	
+ 	n, err := ioC.conn.Write([]byte(peticion))
+ 	if err != nil{
+ 		log.Println(err)
+ 		return
+ 	}
+ 	log.Println("Petición para enviar archivo enviada al servidor, escrito ", n)
+
+
+ 	//verifico si acepto o rechazo el archivo
+ 	var buff [512]byte //da igual si lo hago un slice de una vez
+ 	n, err = ioC.conn.Read(buff[:])
+ 	if err != nil{
+ 		log.Println("Error al leer la respuesta del servidor:", err)
+ 		return
+ 	}
+
+ 	temp := string(buff[:n])
+ 	rsp := strings.Trim(temp, "\n")
+ 	rsps := strings.Split(rsp," ")
+ 	if rsps[0] == Ps.S_ENVIO_RECHAZADO{
+ 		log.Println("El servidor no acepto la transferecia")
+ 		return
+ 	}
+
+	if rsps[0] != Ps.S_ENVIO_APROBADO{
+		log.Println("Respuesta invalida. El servidor respondio con:", rsp)
+		return
+	}
+
+	log.Println("El servidor acepto la transferencia del archivo")	
+
+	//Le envio el archivo
+	ar, err := os.Open(rutaArchivo)
+	if err != nil{
+		log.Println(err)
+		return
+	}
+	defer ar.Close()
+
+	bc, err := io.Copy(ioC.conn, ar)
+	if err != nil{
+		
+		log.Println("El archivo no se pudo enviar.")
+		log.Println(err)
+		return
+
+	}else{
+
+		//espera confirmación de recepcion de archivo
+		n, err = ioC.conn.Read(buff[:])
+	 	if err != nil{
+	 		log.Println("Error al leer la respuesta del servidor:", err)
+	 		return
+	 	}
+	 	rsp := string(buff[:n])
+	 	rsp = strings.Trim(rsp, "\n") 
+	 	rsps := strings.Split(rsp," ")
+	 	if rsps[0] != Ps.S_ARCHIVO_RECIVIDO{
+	 		log.Println("Erro, el servidor respondion con:", rsp)	
+	 		return
+ 		}
+ 		log.Println("El servidor indica que recivio el archivo y pide confirmacion")
+	 	log.Println("El mensaje del servidor es:", rsps[1:])
+
+		
+		//Notifico al servidor que efectivamente envie todo el archivo
+		n, err = ioC.conn.Write([]byte(Ps.C_ARCHIVO_ENVIADO+"\n"))
+ 		if err != nil {
+ 			log.Println(err)
+ 			return
+ 		}
+
+ 		log.Println("Confirmacion enviada::", Ps.C_ARCHIVO_ENVIADO)
+		log.Println("Bytes enviados:", bc)
+		log.Println("Lado del cliente termino")
+	}
+	//hasta aquí la primera prueba, que llegue al servidor
+}
+
+
+//Una funcion para probar si el canal recive. Despues sera borrada
+func (ioCli *IoCliente) ToChan(msg string){
+	//fuera de protocolo
+	n, err := ioCli.conn.Write([]byte(msg+"\n"))
+	if err != nil{
+		log.Println("El mensaje no se pudo enviar por el canal")
+	}
+	log.Println("Bytes escritos", n)
+
+	//leer la respuesta
+	var niceEcho [512]byte 
+	n, err = ioCli.conn.Read(niceEcho[:])
+	if err != nil{
+		log.Println(err)
+		return
+	}
+	log.Println("FROM_S:",string(niceEcho[:n]))
+}
+
+
+
 
 
 var ioCliente IoCliente
@@ -80,7 +198,7 @@ func main(){
 func validarEntrada(entrada string){
 	divisionEntrada := strings.Split(entrada, " ")
 	comando := strings.ToUpper(divisionEntrada[0]) //no case sensitive
-	parametros := make(map[string]string) //lis de parametros que acompañan al comando, varian segun el comando
+	campos := make(map[string]string) //lis de campos que acompañan al comando, varian segun el comando
 
 	switch(comando){
 	case "UNIR":
@@ -90,8 +208,8 @@ func validarEntrada(entrada string){
 			log.Println("Entrada invalida. Se requiere: unir <espacio> nombre-canal")
 			return
 		}
-		parametros["canal"] = divisionEntrada[1]
-		ioCliente.UnirCanal(parametros) 
+		campos["nombreCanal"] = divisionEntrada[1]
+		gestionar("unir", campos)
 
 
 	case "ENVIAR":
@@ -113,6 +231,9 @@ func validarEntrada(entrada string){
 		ar, err := os.Open(rutaArchivo)
 		if err != nil{
 			log.Println("Error al intentar abrir la ruta del archivo")
+			log.Println(rutaArchivo)
+			log.Println(err)
+
 			return
 		}
 		arInfo, err := ar.Stat()
@@ -127,18 +248,18 @@ func validarEntrada(entrada string){
 		nombreArchivo := arInfo.Name()
 		pesoArchivo := fmt.Sprintf("%d", arInfo.Size()) //el peso se envÍa en string
 		
-		parametros["rutaArchivo"] = rutaArchivo
-		parametros["nombreArchivo"] = nombreArchivo 
-		parametros["pesoArchivo"] = pesoArchivo 
-		parametros["canal"] = nombreCanal
-		// intermediarioClienteServidor("enviar", parametros)
+		campos["rutaArchivo"] = rutaArchivo
+		campos["nombreArchivo"] = nombreArchivo 
+		campos["pesoArchivo"] = pesoArchivo 
+		campos["canal"] = nombreCanal
+		gestionar("enviar", campos)
 
 	case "SALIR":
 		
 		//Para salir hay dos opciones: salir del canal o salir completamente del programa
 		if len(divisionEntrada) > 2 {
-			log.Println("Demaciados parametros para el comado salir: se espera salir <espacio> nombre-canal o")
-			log.Println("salir (sin parametros) para salir completamente del programa")
+			log.Println("Demaciados campos para el comado salir: se espera salir <espacio> nombre-canal o")
+			log.Println("salir (sin campos) para salir completamente del programa")
 			return
 		} 
 
@@ -150,7 +271,6 @@ func validarEntrada(entrada string){
 				return
 			}else if estado == "CONECTADO"{
 				log.Println("Cerrando conexion con el servidor...")
-				// intermediarioClienteServidor("desconectar", parametros) //parametros vacios para esta peticion
 				return
 			}
 		}
@@ -161,12 +281,20 @@ func validarEntrada(entrada string){
 				log.Println("No estas unido a un canal")
 				return
 			}
-			parametros["canal"] = divisionEntrada[1]
-			// intermediarioClienteServidor("salir-canal", parametros)
+			campos["canal"] = divisionEntrada[1]
+	
 		}
 
+
+	case "DEBUG":
+		debug()
+
+
 	default:
-		log.Println("Entrada invalida")
+		campos["msg"] = entrada
+		gestionar("toChan", campos)
+
+		// log.Println("Entrada invalida")
 	}
 }
 
@@ -174,80 +302,42 @@ func validarEntrada(entrada string){
 
 
 
-
-
-
-
-
-
-
-// func enviarArchivo(s *Servidor, parametros []string){
-// 	//se espera que entrada tenga [cmd][nombreCanal][nombreArchivo] y agrega el peso antes de
-// 	//enviar la petición
-	
-// 	//a partir de aquí se esta en la fase de transmisión de archivos, el formato de mensajes es 
-// 	//en bytes en lugar de strings
-// 	canal := parametros[1]
-// 	ruta := parametros[2]
-	
-	
-
-// 	ar, err := os.Open(ruta)
-// 	if err != nil{
-// 		log.Println(err)
-// 		return
-// 	}
-// 	defer ar.Close()
-	
-// 	arInfo, err := ar.Stat()
-// 	if err != nil{
-// 		log.Println(err)
-// 		return
-// 	}	
-// 	peso := arInfo.Size()
-// 	nombreAr := arInfo.Name()
-
-// 	//cliente encia msg canal nombreAr peso
-// 	s.peticion<- ps.CLIENTE_ENVIAR_ARCHIVO + " " + canal + " " + nombreAr + " " + fmt.Sprintf("%d",peso)
-// 	if rsp := <-s.respuesta; rsp == ps.SERVIDOR_ENVIO_APROBADO{
-// 		log.Println("El servidor acepto la transferencia del archivo")
+//Utilisa el ioCliente para hacer las peticiones y determina que hacer con las respuestas.
+//Es como un controller en el modelo MVC
+func gestionar(orden string, campos map[string]string){
+	switch orden{
+	case "unir":
 		
-// 	}else if rsp == ps.SERVIDOR_ENVIO_NOAPROBADO{
-// 		log.Println("El servidor no acepto la transferecia")
-// 		return
-// 	}else{
-// 		log.Println("El servidor respondio con:", rsp)
-// 		return
-// 	}
+		exito, serr := ioCliente.UnirCanal(campos["nombreCanal"])
+		if serr != "" {
+			log.Println(serr)
+			return
+		} 
+
+		if exito {
+			estado = "UNIDO_A_CANAL"
+			log.Println("Te uniste al canal")
+		}else{
+			//continua en estado CONECTADO
+			log.Println("Fallo. No estas en el canal")
+		}
+
+	case "salir":
 
 
-// 	n , err := io.Copy(s.conn, ar)
-// 	if err != nil{
-// 		// log.Println("El archivo no se pudo enviar.")
-// 		s.peticion<- ps.CLIENTE_ERROR_TERMINAR_ENVIO
-// 		log.Println(err)
-// 		return
-// 	}
-// 	// io.Copy(conn, io.Reader(nil))
-// 	log.Println("Archivo enviado")
-// 	log.Println("Bytes enviados", n)
-// 	// log.Println("Toda la petición fue procesada con éxito")
-// }
-
-// //anota las respuestas del servidor para que las rutinas puedan acceder a ellas
-// func mostrarEnTerminal(respuesta chan<- string, conn net.Conn){
-// 	lector := bufio.NewScanner(conn)
-// 	for lector.Scan(){
-// 		entrada := lector.Text()
-// 		//divido entre las comunicaciones internas y los mensajes para la terminal
-// 		rsp := strings.Split(entrada, " ")
-// 		if rsp[0] == "server:"{
-// 			entrada = "---->"+entrada
-// 			io.Writer(os.Stdout).Write([]byte(entrada))
-// 		}
-// 			respuesta<- entrada 
-// 	}
-	
-// }
+	case "toChan":		
+		ioCliente.ToChan(campos["msg"])
 
 
+	case "enviar":
+
+		ioCliente.EnviarArchivo(campos["rutaArchivo"], campos["nombreArchivo"], campos["pesoArchivo"], campos["canal"])
+
+	}
+
+}
+
+
+func debug(){
+	log.Println(Ps.LOG)
+}
