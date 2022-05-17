@@ -8,7 +8,7 @@ import (
 	"bufio"
 	"strings"
 	"fmt"
-	// "io"
+	"io"
 )
 
 
@@ -253,6 +253,7 @@ func handlerCliente(conn net.Conn, canales Canales){
 	cli.Leer() //para recivir los mensajes del cliente, se cierra si la conexion se pierde
 	close(cli.escribir) //cerra el canal de escribir termina con la subrutina Leer()
 	log.Println("El cliente ",cli.conn.RemoteAddr().String(),"se desconecto")
+	//en este punto la variable cli deja de existir
 }
 
 
@@ -280,44 +281,67 @@ func recivirArchivo(cli *Cliente, entrada []string){
 			var cuenta int 
 			
 			//ahora el servidor está listo para recivir el archivo
-			//El servidor notificara <imposible continuar> apartir de ahora si ocurre un error de lectura
+			//El servidor notificara <imposible continuar> si ocurre un error de lectura apartir de ahora
 			for {
 				n, err := cli.conn.Read(buffer)
 				cuenta+=n
 
 				//en caso de error al leer de la conexión
-				// if err != nil{
-					if true{ //forzar el error
+				if err != nil{
+					// if true{ //forzar el error
 					//EOF ocurre si hay una perdida de conexión
-					archivo.Close()
-					defer os.Remove("servidor_archivos/"+nombreAr) //se debe eliminar el archivo
-					log.Println(err)
-					//este error ocurre mientras el cliente sigue enviando datos
-					//cada stream que el cliente envie a partir de ahora es invalido
-					//hasta que el cliente y el servidor entiendan que deden iniciar un nuevo proceso
-					//por ahora cerrare la conexion por completo
-
-					//Saco al cliente del registro del canal
-					//elimino la referencia al canal desde el cliente
-					tempCanal := cli.canal
-					cli.canal.salir<-cli //saco al cliente del canal. Debería ser algo como canal.salir<- cli. Aparte se proceso cli.canal = nil
-					<-tempCanal.listo //tengo que recivir la notificación de que el canal termino de sacar al cliente
+					if err == io.EOF {
+						
+						archivo.Close() 
+						os.Remove("servidor_archivos/"+nombreAr) //La conexion se cerror de forma inesperada asi que borro el archivo
+						log.Println(err)
 					
-					//notifico al cliente
-					cli.escribir<- Ps.S_IMPOSIBLE_CONTINUAR //No puedo leer de la conexion, pero puedo escribir. Esto es TCP
+						//Borro al cliente completamente
+						//Primero lo elimino del canal
+						referenciaCanal := cli.canal
+						cli.canal.salir<-cli //Elimino el registro del cliente en el canal. Debería ser algo como canal.salir<- cli. Aparte se esta proceso cli.canal = nil, algo que debe ser natural para el cli, no el canal
+						<-referenciaCanal.listo //Espera la notificacón del canal sobre sacar al cliente
+						//Luego cierro su conexion
+						cli.escribir<- Ps.S_IMPOSIBLE_CONTINUAR //No puedo leer de la conexion, pero puedo escribir. Esto es TCP
+						<-cli.listo
+						cli.conn.Close() //Cerrar la conexion termina las runitinas para Leer() y Escribir del cliente
+						return
+					}
+					
+					//Si el error no es por perdida de conexion entonces es un error del lado del servidor
+					//Como este error ocurre mientras el cliente sigue enviando datos
+					//cada stream que el cliente envie es invalido a partir de ahora 
+					//hasta que el cliente y el servidor entiendan que deden iniciar un nuevo proceso
+					//por ahora solventare este problema cerrando la conexión por completo
+
+					//Borro al cliente completamente
+					//Primero lo elimino del canal
+					referenciaCanal := cli.canal
+					cli.canal.salir<-cli //Elimino el registro del cliente en el canal. Debería ser algo como canal.salir<- cli. Aparte se esta proceso cli.canal = nil, algo que debe ser natural para el cli, no el canal
+					<-referenciaCanal.listo //Espera la notificacón del canal sobre sacar al cliente
+					
+					//notifíco al cliente del error en el lado del servidor
+					cli.escribir<- Ps.S_IMPOSIBLE_CONTINUAR +" "+ "no puedo escuchar"  //No puedo leer de la conexion, pero puedo escribir. Esto es TCP
 					<-cli.listo
-					cli.conn.Close() //elimino completamente al cliente
-					return //a partir de ahora el cliente esta desconectado y todos sus datos se eliminaron
+					cli.conn.Close() //Cerrar la conexion termina las runitinas para Leer() y Escribir() del cliente
+					return 
 				}
 
+
 				//en caso de error al escribir en el archivo creado
-				_, aerr := archivo.Write(buffer[:n])
-				if aerr != nil{
+				_, werr := archivo.Write(buffer[:n])
+				if werr != nil{
+					log.Println(werr)
 					archivo.Close()
-					defer os.Remove("servidor_archivos/"+nombreAr) //eliminar el archivo porque no se pudo crear correctamente
-					log.Println(aerr)
-					cli.escribir<- Ps.S_IMPOSIBLE_CONTINUAR
+					os.Remove("servidor_archivos/"+nombreAr) //eliminar el archivo porque no se pudo crear correctamente
+					cli.escribir<- Ps.S_TERMINAR_PROCESO //se espera reply desde el cliente, debe haber deadline
 					<-cli.listo
+					//descargar todo lo que se reciva hasta que el cliente notifíque un <terminar proceso>
+					//por ahora matare la conexion y cerrare todo, luego hay que manejar el error
+					referenciaCanal := cli.canal
+					cli.canal.salir<-cli //Elimino el registro del cliente en el canal. Debería ser algo como canal.salir<- cli. Aparte se esta proceso cli.canal = nil, algo que debe ser natural para el cli, no el canal
+					<-referenciaCanal.listo //Espera la notificacón del canal sobre sacar al cliente
+					cli.conn.Close() //Cerrar la conexion termina las runitinas para Leer() y Escribir() del cliente
 					return
 				}
 
@@ -341,19 +365,16 @@ func recivirArchivo(cli *Cliente, entrada []string){
 		if pesoAr != fmt.Sprintf("%d", cuenta) { //comparación de strings
 			
 			//el archivo se debe borrar pero antes hay que comunicar al cliente del error y este
-			//debe devolver el mensaje <imposible continuar>	
+			//debe devolver el mensaje <terminar proceso>	
 			log.Println("Error. Los bytes recividos no son iguales a los bytes enviados por el cliente")
-			cli.escribir<- Ps.S_IMPOSIBLE_CONTINUAR + " " + "Los bytes no coinciden " + fmt.Sprintf("%d",cuenta)
+			cli.escribir<- Ps.S_TERMINAR_PROCESO + " " + "Los bytes no coinciden " + fmt.Sprintf("%d",cuenta)
 			<-cli.listo //espero que se termine de procesar 
 			log.Println("Esperando respuesta...")
 			//ahora se espera la respuesta del cliente con un deadline // cli.conn.SetReadDeadline(time)
 			rspCli := make([]byte, 128)
 			n, err := cli.conn.Read(rspCli)
 			if err != nil{
-				//persistencia hasta 3 intentos, si no se puede leer al cliente, le intento escribir <no puedo escuchar>
-				//si se escribe cierro la conexion
-				//el cliente debe dejar de enviar cualquier mensaje tambien y cerrar
-				//esto debe pasar si algún estremo no puede escuchar
+				//Debería usar persistencia hasta 3 intentos, si no se puede leer al cliente, le intento escribir <no puedo escuchar>
 
 				os.Remove("servidor_archivos/"+nombreAr)
 				log.Println(err)

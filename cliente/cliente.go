@@ -10,6 +10,7 @@ import(
 	"fmt"
 )
 
+var kill = false //True si algun proceso indica que este cliente debe dejar de funcionar
 
 var estado string //los estados posibles del cliente CONECTADO, UNIDO_A_CANAL, ACORDANDO_TRANSMISION
 
@@ -27,13 +28,18 @@ func main(){
 	log.Println("Conexion establecida con el servidor")
 	ioCliente.Conn = conn
 
+	
+
 	//Comienso a recivir las entradas desde la terminal
 	terminal := bufio.NewScanner(os.Stdin)
 	for terminal.Scan(){
 		entrada := terminal.Text() //lee una cadena de texto hasta \n
 		validarEntrada(entrada) //un comando a la vez. Es sincrona.
+		if kill {
+			break
+		}
 	}
-
+	log.Println("Cliente cerrado, bye...")
 }
 
 
@@ -52,7 +58,7 @@ func validarEntrada(entrada string){
 		// se espera : UNIR <espeacio> canal.
 		if len(divisionEntrada) != 2{
 			log.Println("Entrada invalida. Se requiere: unir <espacio> nombre-canal")
-			return
+			return 
 		}
 		campos["nombreCanal"] = divisionEntrada[1]
 		gestionar("unir", campos)
@@ -63,13 +69,13 @@ func validarEntrada(entrada string){
 		//solo se puede enviar si se esta en el estado de unido a canal
 		if estado != "UNIDO_A_CANAL"{
 			log.Println("No estas unido a un canal")
-			return
+			return 
 		}
 
 		// se espera : ENVIAR <espeacio> canal <espacio> ruta-archivo. Esto es independiente del protocolo simple
 		if len(divisionEntrada) != 3{
 			log.Println("Entrada invalida. Se requiere: enviar <espacio> nombre-canal <espacio> ruta-archivo")
-			return
+			return 
 		}
 
 		//nivel 2 de validacion: se comprueba que el archivo existe y es legible.
@@ -80,12 +86,12 @@ func validarEntrada(entrada string){
 			log.Println(rutaArchivo)
 			log.Println(err)
 
-			return
+			return 
 		}
 		arInfo, err := ar.Stat()
 		if err != nil{
 			log.Println("Error al intentar leer la estructura del archivo")
-			return
+			return 
 		}
 		ar.Close()
 		//validación completada
@@ -106,7 +112,7 @@ func validarEntrada(entrada string){
 		if len(divisionEntrada) > 2 {
 			log.Println("Demaciados campos para el comado salir: se espera salir <espacio> nombre-canal o")
 			log.Println("salir (sin campos) para salir completamente del programa")
-			return
+			return 
 		} 
 
 		
@@ -114,10 +120,10 @@ func validarEntrada(entrada string){
 			if estado == "UNIDO_A_CANAL"{
 				//primero lo saco del canal
 				//luego lo saco del programa
-				return
+				return 
 			}else if estado == "CONECTADO"{
 				log.Println("Cerrando conexion con el servidor...")
-				return
+				return 
 			}
 		}
 
@@ -125,7 +131,7 @@ func validarEntrada(entrada string){
 		if len(divisionEntrada) == 2 {
 			if estado != "UNIDO_A_CANAL"{
 				log.Println("No estas unido a un canal")
-				return
+				return 
 			}
 			campos["canal"] = divisionEntrada[1]
 	
@@ -139,9 +145,10 @@ func validarEntrada(entrada string){
 	default:
 		campos["msg"] = entrada
 		gestionar("toChan", campos)
-
+		return 
 		// log.Println("Entrada invalida")
 	}
+	return 
 }
 
 
@@ -177,7 +184,14 @@ func gestionar(orden string, campos map[string]string){
 
 	case "enviar":
 
-		ioCliente.EnviarArchivo(campos["rutaArchivo"], campos["nombreArchivo"], campos["pesoArchivo"], campos["canal"])
+	serr := ioCliente.EnviarArchivo(campos["rutaArchivo"], campos["nombreArchivo"], campos["pesoArchivo"], campos["canal"])
+	if serr == "conndead"{
+		kill = true 
+	}
+
+
+	
+	default:
 
 	}
 
