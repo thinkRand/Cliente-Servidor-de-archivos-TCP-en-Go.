@@ -235,6 +235,7 @@ func escucharRespuestaOrdenes(){
 	lector := bufio.NewScanner(ioCliente.Conn)
 	for lector.Scan(){
 		entrada := lector.Text()
+		fmt.Println("escucharRespuestaOrdenes:", entrada)
 		filtrarMensaje(entrada)
 	}
 }
